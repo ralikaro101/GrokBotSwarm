@@ -120,3 +120,16 @@ def news_blocks():
 
 def research(symbol):
     return require_ok(request_json("/research?symbol=" + symbol.upper()), "research failed")
+
+
+def risk():
+    return require_ok(request_json("/risk"), "risk request failed")
+
+
+def performance():
+    return require_ok(request_json("/performance"), "performance request failed")["symbols"]
+
+
+def modify_stop(ticket, stop):
+    body = require_ok(request_json("/modify", "POST", {"ticket": ticket, "stop": stop, "confirmation": "DEMO"}), "modify failed")
+    return f"Stop for ticket {body['ticket']} moved to {body['stop']}."

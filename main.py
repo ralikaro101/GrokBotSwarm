@@ -1,3 +1,5 @@
+import asyncio
+import os
 import discord
 from discord import app_commands
 
@@ -51,6 +53,36 @@ async def price(interaction: discord.Interaction, symbol: str = "EURUSD"):
 async def positions(interaction: discord.Interaction):
     await bridge_reply(interaction, mt5_client.positions_text)
 
+
+
+
+_auto_task = None
+
+
+async def scheduled_cycle():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        if os.getenv("SWARM_AUTO", "").lower() == "on":
+            try:
+                print(strategy.run_cycle())
+            except Exception as exc:
+                print(f"Scheduled cycle failed: {exc}")
+        await asyncio.sleep(300)
+
+
+@tree.command(name="scheduler", description="Turn the five-minute demo cycle on or off")
+@app_commands.describe(state="on or off", confirmation="Type DEMO when turning on")
+async def scheduler(interaction: discord.Interaction, state: str, confirmation: str = ""):
+    global _auto_task
+    enabled = state.lower() == "on"
+    if enabled and confirmation.upper() != "DEMO":
+        await interaction.response.send_message("Turning the scheduler on requires DEMO.")
+        return
+    os.environ["SWARM_AUTO"] = "on" if enabled else "off"
+    if enabled and (_auto_task is None or _auto_task.done()):
+        _auto_task = asyncio.create_task(scheduled_cycle())
+    journal.record("scheduler", state.lower(), "Five-minute demo cycle changed.")
+    await interaction.response.send_message(f"Scheduler {state.lower()}.")
 
 
 @tree.command(name="auto", description="Let the swarm decide and place guarded demo trades")

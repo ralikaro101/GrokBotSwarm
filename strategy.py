@@ -8,12 +8,49 @@ import journal
 import mt5_client
 
 
-def decide(row, positions, blocks):
+def manage_positions(rows):
+    actions = []
+    by_symbol = {row["symbol"]: row for row in rows}
+    for position in mt5_client.positions_rows():
+        row = by_symbol.get(position["symbol"])
+        if row is None:
+            continue
+        fast, slow = row.get("fast"), row.get("slow")
+        if fast is None or slow is None:
+            continue
+        reversed_buy = position["type"] == "buy" and fast < slow
+        reversed_sell = position["type"] == "sell" and fast > slow
+        if reversed_buy or reversed_sell:
+            result = mt5_client.close_text(position["ticket"], "DEMO")
+            journal.record("trade-manager", "close", result, position["symbol"])
+            actions.append(result)
+            continue
+        entry = position["price_open"]
+        current = position["price_current"]
+        profitable = (position["type"] == "buy" and current > entry) or (position["type"] == "sell" and current < entry)
+        if profitable:
+            result = mt5_client.modify_stop(position["ticket"], entry)
+            journal.record("trade-manager", "break-even", result, position["symbol"])
+            actions.append(result)
+    return actions
+
+
+def decide(row, positions, blocks, limits, performance):
     symbol = row["symbol"]
     if any(block in symbol for block in blocks):
         return "hold", f"{symbol}: news block is active."
     if any(item["symbol"] == symbol for item in positions):
         return "hold", f"{symbol}: a position is already open."
+    if len(positions) >= limits["max_positions"]:
+        return "hold", f"{symbol}: position cap {limits['max_positions']} is reached."
+    if limits["daily_profit"] <= -limits["max_daily_loss"]:
+        return "hold", f"{symbol}: daily loss limit is reached."
+    spread = row["ask"] - row["bid"]
+    if spread > limits["max_spread"]:
+        return "hold", f"{symbol}: spread {spread:.5f} is too wide."
+    stats = performance.get(symbol, {})
+    if stats.get("losses", 0) >= 3 and stats.get("profit", 0) < 0:
+        return "hold", f"{symbol}: performance agent disabled it after losses."
     fast = row.get("fast")
     slow = row.get("slow")
     if fast is None or slow is None or fast == slow:
@@ -31,9 +68,12 @@ def run_cycle():
     rows = mt5_client.watch_rows()
     positions = mt5_client.positions_rows()
     blocks = mt5_client.news_blocks()
-    decisions = []
+    limits = mt5_client.risk()
+    performance = mt5_client.performance()
+    decisions = manage_positions(rows)
+    positions = mt5_client.positions_rows()
     for row in rows:
-        side, reason = decide(row, positions, blocks)
+        side, reason = decide(row, positions, blocks, limits, performance)
         journal.record("coordinator", side, reason, row["symbol"])
         if side == "hold":
             decisions.append(reason)

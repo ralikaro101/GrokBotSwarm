@@ -5,10 +5,12 @@ import mt5_client
 
 AGENTS = {
     "market": {"name": "Market", "role": "Reads prices for every watched symbol."},
-    "risk": {"name": "Risk", "role": "Rejects orders without a stop or above the size limit."},
+    "risk": {"name": "Risk", "role": "Caps positions, daily loss, and spread."},
     "execution": {"name": "Execution", "role": "Sends an approved demo order to MT5."},
     "news": {"name": "News", "role": "Records event warnings supplied by the operator."},
     "research": {"name": "Research", "role": "Tests recent price behavior and shares evidence with the swarm."},
+    "performance": {"name": "Performance", "role": "Disables symbols with repeated live losses."},
+    "trade-manager": {"name": "Trade Manager", "role": "Moves stops to break-even or closes reversed positions."},
     "journal": {"name": "Journal", "role": "Reads the shared record of agent activity."},
     "coordinator": {"name": "Coordinator", "role": "Combines prices, risk, and journal state."},
 }

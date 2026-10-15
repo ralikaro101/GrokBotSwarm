@@ -106,6 +106,44 @@ def research_view(symbol):
     return payload(True, symbol=symbol, samples=len(testing), acted=acted, accuracy=round(accuracy, 3), threshold=threshold)
 
 
+
+def risk_view():
+    account = account_view()
+    if not account["ok"]:
+        return account
+    positions = positions_view()
+    if not positions["ok"]:
+        return positions
+    max_positions = int(os.getenv("MT5_MAX_POSITIONS", "3"))
+    max_daily_loss = float(os.getenv("MT5_MAX_DAILY_LOSS", "10"))
+    max_spread = float(os.getenv("MT5_MAX_SPREAD", "0.002"))
+    return payload(
+        True,
+        open_positions=positions["count"],
+        max_positions=max_positions,
+        daily_profit=account["profit"],
+        max_daily_loss=max_daily_loss,
+        max_spread=max_spread,
+    )
+
+
+def performance_view():
+    deals = mt5.history_deals_get(mt5.datetime(2020, 1, 1), mt5.datetime.now()) if False else None
+    from datetime import datetime, timedelta
+    end = datetime.now()
+    start = end - timedelta(days=30)
+    deals = mt5.history_deals_get(start, end)
+    totals = {}
+    if deals:
+        for deal in deals:
+            if deal.entry != mt5.DEAL_ENTRY_OUT:
+                continue
+            item = totals.setdefault(deal.symbol, {"wins": 0, "losses": 0, "profit": 0.0})
+            item["profit"] += float(deal.profit)
+            item["wins" if deal.profit >= 0 else "losses"] += 1
+    return payload(True, symbols=totals)
+
+
 def watch_view():
     prices = []
     errors = []
@@ -197,6 +235,27 @@ def order_view(data):
     return payload(True, ticket=result.order, side=side, symbol=symbol, volume=volume, price=result.price, stop=request["sl"])
 
 
+
+def modify_view(data):
+    if str(data.get("confirmation", "")).upper() != "DEMO":
+        return payload(False, error="Confirmation must be DEMO.")
+    try:
+        ticket = int(data.get("ticket"))
+        stop = float(data.get("stop"))
+    except (TypeError, ValueError):
+        return payload(False, error="Ticket and stop must be numbers.")
+    rows = mt5.positions_get(ticket=ticket)
+    if not rows:
+        return payload(False, error="Position was not found.")
+    position = rows[0]
+    info = mt5.symbol_info(position.symbol)
+    request = {"action": mt5.TRADE_ACTION_SLTP, "position": ticket, "symbol": position.symbol, "sl": round(stop, info.digits), "tp": position.tp}
+    result = mt5.order_send(request)
+    if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+        return payload(False, error="stop update rejected")
+    return payload(True, ticket=ticket, stop=request["sl"])
+
+
 def close_view(data):
     account = account_view()
     if not account["ok"]:
@@ -271,6 +330,8 @@ class Handler(BaseHTTPRequestHandler):
             "/research": lambda: research_view(symbol),
             "/price": lambda: price_view(symbol),
             "/positions": positions_view,
+            "/risk": risk_view,
+            "/performance": performance_view,
             "/news": lambda: payload(True, blocks=sorted(NEWS_BLOCKS)),
         }
         if path not in routes:
@@ -291,6 +352,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/order":
             body = order_view(data)
+        elif path == "/modify":
+            body = modify_view(data)
         elif path == "/close":
             body = close_view(data)
         else:
