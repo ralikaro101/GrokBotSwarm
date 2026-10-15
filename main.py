@@ -1,8 +1,9 @@
-﻿import discord
+import discord
 from discord import app_commands
 
 import config
 from agents import AGENTS, answer
+import mt5_client
 
 
 intents = discord.Intents.default()
@@ -18,9 +19,42 @@ async def on_ready():
 
 @tree.command(name="status", description="Show swarm health")
 async def status(interaction: discord.Interaction):
+    connected = "configured" if config.MT5_BRIDGE_URL else "not configured"
     await interaction.response.send_message(
-        f"Online. {len(AGENTS)} agents loaded. MT5 execution is not connected."
+        f"Online. {len(AGENTS)} agents loaded. MT5 bridge is {connected}."
     )
+
+
+async def bridge_reply(interaction, text):
+    await interaction.response.send_message(text[:1900])
+
+
+@tree.command(name="account", description="Show the connected MT5 demo account")
+async def account(interaction: discord.Interaction):
+    try:
+        text = mt5_client.account_text()
+    except mt5_client.BridgeError as exc:
+        text = str(exc)
+    await bridge_reply(interaction, text)
+
+
+@tree.command(name="price", description="Show a live MT5 price")
+@app_commands.describe(symbol="Symbol, for example EURUSD")
+async def price(interaction: discord.Interaction, symbol: str = "EURUSD"):
+    try:
+        text = mt5_client.price_text(symbol)
+    except mt5_client.BridgeError as exc:
+        text = str(exc)
+    await bridge_reply(interaction, text)
+
+
+@tree.command(name="positions", description="Show open MT5 positions")
+async def positions(interaction: discord.Interaction):
+    try:
+        text = mt5_client.positions_text()
+    except mt5_client.BridgeError as exc:
+        text = str(exc)
+    await bridge_reply(interaction, text)
 
 
 @tree.command(name="agents", description="List the six agents")
