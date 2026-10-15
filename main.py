@@ -25,36 +25,29 @@ async def status(interaction: discord.Interaction):
     )
 
 
-async def bridge_reply(interaction, text):
-    await interaction.response.send_message(text[:1900])
+async def bridge_reply(interaction, producer):
+    await interaction.response.defer(thinking=True)
+    try:
+        text = producer()
+    except Exception as exc:
+        text = str(exc)
+    await interaction.followup.send(text[:1900])
 
 
 @tree.command(name="account", description="Show the connected MT5 demo account")
 async def account(interaction: discord.Interaction):
-    try:
-        text = mt5_client.account_text()
-    except mt5_client.BridgeError as exc:
-        text = str(exc)
-    await bridge_reply(interaction, text)
+    await bridge_reply(interaction, mt5_client.account_text)
 
 
 @tree.command(name="price", description="Show a live MT5 price")
 @app_commands.describe(symbol="Symbol, for example EURUSD")
 async def price(interaction: discord.Interaction, symbol: str = "EURUSD"):
-    try:
-        text = mt5_client.price_text(symbol)
-    except mt5_client.BridgeError as exc:
-        text = str(exc)
-    await bridge_reply(interaction, text)
+    await bridge_reply(interaction, lambda: mt5_client.price_text(symbol))
 
 
 @tree.command(name="positions", description="Show open MT5 positions")
 async def positions(interaction: discord.Interaction):
-    try:
-        text = mt5_client.positions_text()
-    except mt5_client.BridgeError as exc:
-        text = str(exc)
-    await bridge_reply(interaction, text)
+    await bridge_reply(interaction, mt5_client.positions_text)
 
 
 @tree.command(name="agents", description="List the six agents")
