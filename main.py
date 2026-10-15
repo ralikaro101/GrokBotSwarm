@@ -3,6 +3,7 @@ from discord import app_commands
 
 import config
 from agents import AGENTS, answer
+import journal
 import mt5_client
 
 
@@ -49,6 +50,48 @@ async def price(interaction: discord.Interaction, symbol: str = "EURUSD"):
 async def positions(interaction: discord.Interaction):
     await bridge_reply(interaction, mt5_client.positions_text)
 
+
+
+@tree.command(name="watch", description="Show all watched market prices")
+async def watch(interaction: discord.Interaction):
+    await bridge_reply(interaction, mt5_client.watch_text)
+
+
+@tree.command(name="buy", description="Place a guarded demo buy order")
+@app_commands.describe(symbol="Watched symbol", volume="Lot size", stop="Stop-loss price", confirmation="Type DEMO")
+async def buy(interaction: discord.Interaction, symbol: str, volume: float, stop: float, confirmation: str):
+    await bridge_reply(interaction, lambda: place("buy", symbol, volume, stop, confirmation))
+
+
+@tree.command(name="sell", description="Place a guarded demo sell order")
+@app_commands.describe(symbol="Watched symbol", volume="Lot size", stop="Stop-loss price", confirmation="Type DEMO")
+async def sell(interaction: discord.Interaction, symbol: str, volume: float, stop: float, confirmation: str):
+    await bridge_reply(interaction, lambda: place("sell", symbol, volume, stop, confirmation))
+
+
+@tree.command(name="close", description="Close one demo position")
+@app_commands.describe(ticket="Position ticket", confirmation="Type DEMO")
+async def close(interaction: discord.Interaction, ticket: int, confirmation: str):
+    await bridge_reply(interaction, lambda: close_position(ticket, confirmation))
+
+
+@tree.command(name="note", description="Record a shared note for every agent")
+@app_commands.describe(text="Note to store in the shared journal")
+async def note(interaction: discord.Interaction, text: str):
+    journal.record("operator", "note", text)
+    await interaction.response.send_message("Note recorded.")
+
+
+def place(side, symbol, volume, stop, confirmation):
+    result = mt5_client.order_text(side, symbol, volume, stop, confirmation)
+    journal.record("execution", side, result, symbol)
+    return result
+
+
+def close_position(ticket, confirmation):
+    result = mt5_client.close_text(ticket, confirmation)
+    journal.record("execution", "close", result)
+    return result
 
 @tree.command(name="agents", description="List the six agents")
 async def agents_cmd(interaction: discord.Interaction):

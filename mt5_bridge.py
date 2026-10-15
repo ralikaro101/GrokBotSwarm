@@ -1,12 +1,11 @@
-"""Read-only MT5 bridge.
+"""MT5 bridge for the logged-in Windows terminal.
 
-Run this on the Windows machine where the IC Markets terminal is logged in.
-It never sends orders.
+Orders are demo-only, require a stop, and are capped by MT5_MAX_VOLUME.
 """
 
+import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import json
 
 import MetaTrader5 as mt5
 from dotenv import load_dotenv
@@ -16,7 +15,8 @@ load_dotenv()
 HOST = os.getenv("MT5_BIND_HOST", "127.0.0.1")
 PORT = int(os.getenv("MT5_BRIDGE_PORT", "8765"))
 TOKEN = os.getenv("MT5_BRIDGE_TOKEN", "").strip()
-SYMBOL = os.getenv("MT5_SYMBOL", "EURUSD")
+SYMBOLS = [item.strip().upper() for item in os.getenv("MT5_SYMBOLS", "EURUSD").split(",") if item.strip()]
+MAX_VOLUME = float(os.getenv("MT5_MAX_VOLUME", "0.01"))
 
 
 def payload(ok, **data):
@@ -28,7 +28,9 @@ def payload(ok, **data):
 def account_view():
     info = mt5.account_info()
     if info is None:
-        return payload(False, error=mt5.last_error())
+        return payload(False, error=str(mt5.last_error()))
+    if "demo" not in info.server.lower():
+        return payload(False, error="Refusing order bridge because this is not a demo server.")
     return payload(
         True,
         login=info.login,
@@ -42,20 +44,36 @@ def account_view():
     )
 
 
-def price_view(symbol):
-    tick = mt5.symbol_info_tick(symbol)
-    if tick is None:
+def tick_for(symbol):
+    info = mt5.symbol_info(symbol)
+    if info is None or not info.visible:
         mt5.symbol_select(symbol, True)
-        tick = mt5.symbol_info_tick(symbol)
-    if tick is None:
-        return payload(False, error=mt5.last_error(), symbol=symbol)
-    return payload(True, symbol=symbol, bid=tick.bid, ask=tick.ask, time=tick.time)
+    return mt5.symbol_info(symbol), mt5.symbol_info_tick(symbol)
+
+
+def price_view(symbol):
+    info, tick = tick_for(symbol)
+    if info is None or tick is None:
+        return payload(False, error=str(mt5.last_error()), symbol=symbol)
+    return payload(True, symbol=symbol, bid=tick.bid, ask=tick.ask, digits=info.digits, time=tick.time)
+
+
+def watch_view():
+    prices = []
+    errors = []
+    for symbol in SYMBOLS:
+        body = price_view(symbol)
+        if body["ok"]:
+            prices.append(body)
+        else:
+            errors.append({"symbol": symbol, "error": body["error"]})
+    return payload(True, prices=prices, errors=errors)
 
 
 def positions_view():
     rows = mt5.positions_get()
     if rows is None:
-        return payload(False, error=mt5.last_error())
+        return payload(False, error=str(mt5.last_error()))
     positions = [
         {
             "ticket": row.ticket,
@@ -69,6 +87,104 @@ def positions_view():
         for row in rows
     ]
     return payload(True, count=len(positions), positions=positions)
+
+
+def normalize_volume(symbol, volume):
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        return None, "Symbol is not available."
+    if volume < info.volume_min or volume > min(info.volume_max, MAX_VOLUME):
+        return None, f"Volume must be between {info.volume_min} and {min(info.volume_max, MAX_VOLUME)}."
+    steps = round((volume - info.volume_min) / info.volume_step)
+    normalized = round(info.volume_min + steps * info.volume_step, 8)
+    if abs(normalized - volume) > info.volume_step / 10:
+        return None, f"Volume does not match the {info.volume_step} lot step."
+    return normalized, ""
+
+
+def order_view(data):
+    account = account_view()
+    if not account["ok"]:
+        return account
+    if str(data.get("confirmation", "")).upper() != "DEMO":
+        return payload(False, error="Confirmation must be DEMO.")
+    side = str(data.get("side", "")).lower()
+    symbol = str(data.get("symbol", "")).upper()
+    if side not in {"buy", "sell"} or symbol not in SYMBOLS:
+        return payload(False, error="Order must use buy or sell and a watched symbol.")
+    try:
+        volume = float(data.get("volume"))
+        stop = float(data.get("stop"))
+    except (TypeError, ValueError):
+        return payload(False, error="Volume and stop must be numbers.")
+    volume, error = normalize_volume(symbol, volume)
+    if error:
+        return payload(False, error=error)
+    info, tick = tick_for(symbol)
+    if info is None or tick is None:
+        return payload(False, error=str(mt5.last_error()))
+    price = tick.ask if side == "buy" else tick.bid
+    if side == "buy" and stop >= price:
+        return payload(False, error="Buy stop must be below the ask.")
+    if side == "sell" and stop <= price:
+        return payload(False, error="Sell stop must be above the bid.")
+    trade_type = mt5.ORDER_TYPE_BUY if side == "buy" else mt5.ORDER_TYPE_SELL
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": volume,
+        "type": trade_type,
+        "price": price,
+        "sl": round(stop, info.digits),
+        "deviation": 20,
+        "magic": 260615,
+        "comment": "grok demo",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+    result = mt5.order_send(request)
+    if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+        message = "order rejected" if result is None else result.comment
+        return payload(False, error=message, detail=str(mt5.last_error()))
+    return payload(True, ticket=result.order, side=side, symbol=symbol, volume=volume, price=result.price, stop=request["sl"])
+
+
+def close_view(data):
+    account = account_view()
+    if not account["ok"]:
+        return account
+    if str(data.get("confirmation", "")).upper() != "DEMO":
+        return payload(False, error="Confirmation must be DEMO.")
+    try:
+        ticket = int(data.get("ticket"))
+    except (TypeError, ValueError):
+        return payload(False, error="Ticket must be a number.")
+    rows = mt5.positions_get(ticket=ticket)
+    if not rows:
+        return payload(False, error="Position was not found.")
+    position = rows[0]
+    info, tick = tick_for(position.symbol)
+    if info is None or tick is None:
+        return payload(False, error=str(mt5.last_error()))
+    closing_buy = position.type == mt5.POSITION_TYPE_BUY
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "position": ticket,
+        "symbol": position.symbol,
+        "volume": position.volume,
+        "type": mt5.ORDER_TYPE_SELL if closing_buy else mt5.ORDER_TYPE_BUY,
+        "price": tick.bid if closing_buy else tick.ask,
+        "deviation": 20,
+        "magic": 260615,
+        "comment": "grok demo close",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+    result = mt5.order_send(request)
+    if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+        message = "close rejected" if result is None else result.comment
+        return payload(False, error=message)
+    return payload(True, ticket=ticket)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -86,30 +202,50 @@ class Handler(BaseHTTPRequestHandler):
     def authorized(self):
         return bool(TOKEN) and self.headers.get("X-Bridge-Token", "") == TOKEN
 
+    def read_json(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        if length <= 0 or length > 10000:
+            return {}
+        return json.loads(self.rfile.read(length).decode("utf-8"))
+
     def do_GET(self):
         if not self.authorized():
             self.send_json(401, payload(False, error="unauthorized"))
             return
         path = self.path.split("?", 1)[0]
-        if path == "/health":
-            self.send_json(200, payload(True, terminal=mt5.terminal_info() is not None))
+        symbol = SYMBOLS[0]
+        if "symbol=" in self.path:
+            symbol = self.path.split("symbol=", 1)[1].split("&", 1)[0].upper()
+        routes = {
+            "/health": lambda: payload(True, terminal=mt5.terminal_info() is not None),
+            "/account": account_view,
+            "/watch": watch_view,
+            "/price": lambda: price_view(symbol),
+            "/positions": positions_view,
+        }
+        if path not in routes:
+            self.send_json(404, payload(False, error="not found"))
             return
-        if path == "/account":
-            body = account_view()
-            self.send_json(200 if body["ok"] else 503, body)
+        body = routes[path]()
+        self.send_json(200 if body["ok"] else 503, body)
+
+    def do_POST(self):
+        if not self.authorized():
+            self.send_json(401, payload(False, error="unauthorized"))
             return
-        if path == "/price":
-            symbol = SYMBOL
-            if "?" in self.path and "symbol=" in self.path:
-                symbol = self.path.split("symbol=", 1)[1].split("&", 1)[0].upper()
-            body = price_view(symbol)
-            self.send_json(200 if body["ok"] else 404, body)
+        try:
+            data = self.read_json()
+        except (json.JSONDecodeError, UnicodeError):
+            self.send_json(400, payload(False, error="Invalid JSON."))
             return
-        if path == "/positions":
-            body = positions_view()
-            self.send_json(200 if body["ok"] else 503, body)
-            return
-        self.send_json(404, payload(False, error="not found"))
+        path = self.path.split("?", 1)[0]
+        if path == "/order":
+            body = order_view(data)
+        elif path == "/close":
+            body = close_view(data)
+        else:
+            body = payload(False, error="not found")
+        self.send_json(200 if body["ok"] else 400, body)
 
 
 def main():
@@ -117,8 +253,10 @@ def main():
         raise SystemExit("Set MT5_BRIDGE_TOKEN before starting the bridge.")
     if not mt5.initialize():
         raise SystemExit(f"MT5 initialize failed: {mt5.last_error()}")
+    for symbol in SYMBOLS:
+        mt5.symbol_select(symbol, True)
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"MT5 bridge listening on {HOST}:{PORT}")
+    print(f"MT5 bridge listening on {HOST}:{PORT}; watching {', '.join(SYMBOLS)}")
     try:
         server.serve_forever()
     finally:

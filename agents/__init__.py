@@ -1,39 +1,45 @@
-﻿"""Six read-only swarm agents. They advise. They do not send MT5 orders."""
+"""Six swarm agents sharing one SQLite journal."""
+
+import journal
+import mt5_client
 
 AGENTS = {
-    "market": {
-        "name": "Market",
-        "role": "Reads price context and says whether conditions are tradable.",
-    },
-    "risk": {
-        "name": "Risk",
-        "role": "Checks size, stop distance, and whether a trade should be skipped.",
-    },
-    "execution": {
-        "name": "Execution",
-        "role": "Turns an approved idea into an order plan. Does not send it.",
-    },
-    "news": {
-        "name": "News",
-        "role": "Flags scheduled events that can invalidate a setup.",
-    },
-    "journal": {
-        "name": "Journal",
-        "role": "Records the decision and the reason it was allowed or blocked.",
-    },
-    "coordinator": {
-        "name": "Coordinator",
-        "role": "Collects the other agents and gives one decision.",
-    },
+    "market": {"name": "Market", "role": "Reads prices for every watched symbol."},
+    "risk": {"name": "Risk", "role": "Rejects orders without a stop or above the size limit."},
+    "execution": {"name": "Execution", "role": "Sends an approved demo order to MT5."},
+    "news": {"name": "News", "role": "Records event warnings supplied by the operator."},
+    "journal": {"name": "Journal", "role": "Reads the shared record of agent activity."},
+    "coordinator": {"name": "Coordinator", "role": "Combines prices, risk, and journal state."},
 }
 
 
-def answer(agent_id: str, question: str) -> str:
-    agent = AGENTS[agent_id]
-    text = question.strip() or "No question supplied."
-    if agent_id == "coordinator":
-        return (
-            f"{agent['name']}: hold. Market, risk, execution, news, and journal "
-            f"have not been wired to live MT5 data. Question: {text}"
-        )
-    return f"{agent['name']}: no live feed yet. I can only acknowledge: {text}"
+def snapshot():
+    prices = mt5_client.watch_rows()
+    positions = mt5_client.positions_rows()
+    return prices, positions, journal.recent_text(5)
+
+
+def answer(agent_id, question):
+    text = question.strip() or "Status check"
+    try:
+        prices, positions, history = snapshot()
+    except mt5_client.BridgeError as exc:
+        journal.record(agent_id, "bridge-error", str(exc))
+        return f"{AGENTS[agent_id]['name']}: bridge unavailable: {exc}"
+
+    symbols = ", ".join(f"{row['symbol']} {row['bid']}/{row['ask']}" for row in prices) or "none"
+    exposure = ", ".join(f"{row['symbol']} {row['type']} {row['volume']}" for row in positions) or "flat"
+    if agent_id == "market":
+        result = f"Watching {symbols}."
+    elif agent_id == "risk":
+        result = f"Open exposure: {exposure}. No order is allowed without a stop and the word DEMO."
+    elif agent_id == "execution":
+        result = "Execution is idle. Use /buy or /sell with symbol, volume, stop, and DEMO."
+    elif agent_id == "news":
+        result = "No news feed is connected. Record warnings manually with /note."
+    elif agent_id == "journal":
+        result = history
+    else:
+        result = f"Prices: {symbols}. Exposure: {exposure}. Recent decisions: {history}"
+    journal.record(agent_id, "answer", f"{text} | {result}")
+    return f"{AGENTS[agent_id]['name']}: {result}"
