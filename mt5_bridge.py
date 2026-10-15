@@ -179,8 +179,9 @@ def normalize_volume(symbol, volume):
     info = mt5.symbol_info(symbol)
     if info is None:
         return None, "Symbol is not available."
-    if volume < info.volume_min or volume > min(info.volume_max, MAX_VOLUME):
-        return None, f"Volume must be between {info.volume_min} and {min(info.volume_max, MAX_VOLUME)}."
+    ceiling = max(info.volume_min, min(info.volume_max, MAX_VOLUME))
+    if volume < info.volume_min or volume > ceiling:
+        return None, f"Volume must be between {info.volume_min} and {ceiling}."
     steps = round((volume - info.volume_min) / info.volume_step)
     normalized = round(info.volume_min + steps * info.volume_step, 8)
     if abs(normalized - volume) > info.volume_step / 10:
