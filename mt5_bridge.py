@@ -17,6 +17,7 @@ PORT = int(os.getenv("MT5_BRIDGE_PORT", "8765"))
 TOKEN = os.getenv("MT5_BRIDGE_TOKEN", "").strip()
 SYMBOLS = [item.strip().upper() for item in os.getenv("MT5_SYMBOLS", "EURUSD").split(",") if item.strip()]
 MAX_VOLUME = float(os.getenv("MT5_MAX_VOLUME", "0.01"))
+NEWS_BLOCKS = {item.strip().upper() for item in os.getenv("MT5_NEWS_BLOCKS", "").split(",") if item.strip()}
 
 
 def payload(ok, **data):
@@ -51,11 +52,33 @@ def tick_for(symbol):
     return mt5.symbol_info(symbol), mt5.symbol_info_tick(symbol)
 
 
+def average(symbol):
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 0, 30)
+    if rates is None or len(rates) < 30:
+        return None, None
+    closes = [float(bar["close"]) for bar in rates]
+    return sum(closes[-8:]) / 8, sum(closes) / len(closes)
+
+
 def price_view(symbol):
     info, tick = tick_for(symbol)
     if info is None or tick is None:
         return payload(False, error=str(mt5.last_error()), symbol=symbol)
-    return payload(True, symbol=symbol, bid=tick.bid, ask=tick.ask, digits=info.digits, time=tick.time)
+    fast, slow = average(symbol)
+    point = info.point or 0.0001
+    distance = point * 150
+    return payload(
+        True,
+        symbol=symbol,
+        bid=tick.bid,
+        ask=tick.ask,
+        digits=info.digits,
+        time=tick.time,
+        fast=fast,
+        slow=slow,
+        stop_buy=round(tick.ask - distance, info.digits),
+        stop_sell=round(tick.bid + distance, info.digits),
+    )
 
 
 def watch_view():
@@ -222,6 +245,7 @@ class Handler(BaseHTTPRequestHandler):
             "/watch": watch_view,
             "/price": lambda: price_view(symbol),
             "/positions": positions_view,
+            "/news": lambda: payload(True, blocks=sorted(NEWS_BLOCKS)),
         }
         if path not in routes:
             self.send_json(404, payload(False, error="not found"))

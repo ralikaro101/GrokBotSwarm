@@ -5,6 +5,7 @@ import config
 from agents import AGENTS, answer
 import journal
 import mt5_client
+import strategy
 
 
 intents = discord.Intents.default()
@@ -50,6 +51,15 @@ async def price(interaction: discord.Interaction, symbol: str = "EURUSD"):
 async def positions(interaction: discord.Interaction):
     await bridge_reply(interaction, mt5_client.positions_text)
 
+
+
+@tree.command(name="auto", description="Let the swarm decide and place guarded demo trades")
+@app_commands.describe(confirmation="Type DEMO to permit autonomous demo orders")
+async def auto(interaction: discord.Interaction, confirmation: str):
+    if confirmation.upper() != "DEMO":
+        await interaction.response.send_message("Confirmation must be DEMO.")
+        return
+    await bridge_reply(interaction, strategy.run_cycle)
 
 
 @tree.command(name="watch", description="Show all watched market prices")

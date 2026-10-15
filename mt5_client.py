@@ -113,3 +113,6 @@ def close_text(ticket, confirmation):
         "close failed",
     )
     return f"Close request sent for ticket {body['ticket']}."
+
+def news_blocks():
+    return require_ok(request_json("/news"), "news request failed")["blocks"]
