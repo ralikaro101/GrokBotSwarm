@@ -18,6 +18,10 @@ def decide(row, positions, blocks):
     slow = row.get("slow")
     if fast is None or slow is None or fast == slow:
         return "hold", f"{symbol}: trend is not clear."
+    evidence = mt5_client.research(symbol)
+    journal.record("research", "learn", f"accuracy {evidence['accuracy']} over {evidence['acted']} signals", symbol)
+    if evidence["acted"] < 10 or evidence["accuracy"] < 0.55:
+        return "hold", f"{symbol}: research accuracy {evidence['accuracy']} is below 0.55."
     side = "buy" if fast > slow else "sell"
     stop = row["stop_buy"] if side == "buy" else row["stop_sell"]
     return side, f"{symbol}: {side}; fast {fast:.5f}, slow {slow:.5f}, stop {stop}."

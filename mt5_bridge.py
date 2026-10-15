@@ -81,6 +81,31 @@ def price_view(symbol):
     )
 
 
+
+def research_view(symbol):
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 1, 240)
+    if rates is None or len(rates) < 80:
+        return payload(False, error="Not enough history.", symbol=symbol)
+    closes = [float(bar["close"]) for bar in rates]
+    returns = [(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes))]
+    split = 180
+    training = returns[:split]
+    testing = returns[split:]
+    threshold = sorted(abs(value) for value in training)[int(len(training) * 0.7)]
+    correct = 0
+    acted = 0
+    for index, move in enumerate(testing, start=split):
+        signal = closes[index] - closes[index - 8]
+        if abs(signal) / closes[index] < threshold:
+            continue
+        acted += 1
+        predicted = 1 if signal > 0 else -1
+        actual = 1 if move > 0 else -1
+        correct += predicted == actual
+    accuracy = correct / acted if acted else 0
+    return payload(True, symbol=symbol, samples=len(testing), acted=acted, accuracy=round(accuracy, 3), threshold=threshold)
+
+
 def watch_view():
     prices = []
     errors = []
@@ -243,6 +268,7 @@ class Handler(BaseHTTPRequestHandler):
             "/health": lambda: payload(True, terminal=mt5.terminal_info() is not None),
             "/account": account_view,
             "/watch": watch_view,
+            "/research": lambda: research_view(symbol),
             "/price": lambda: price_view(symbol),
             "/positions": positions_view,
             "/news": lambda: payload(True, blocks=sorted(NEWS_BLOCKS)),

@@ -116,3 +116,7 @@ def close_text(ticket, confirmation):
 
 def news_blocks():
     return require_ok(request_json("/news"), "news request failed")["blocks"]
+
+
+def research(symbol):
+    return require_ok(request_json("/research?symbol=" + symbol.upper()), "research failed")
