@@ -1,0 +1,15 @@
+﻿[Unit]
+Description=GrokBotSwarm Discord bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/grokswarm
+ExecStart=/home/ubuntu/grokswarm/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
