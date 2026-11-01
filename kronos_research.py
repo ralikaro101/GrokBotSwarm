@@ -1,8 +1,4 @@
-"""Optional Kronos M5 forecast adapter.
-
-Kronos is deliberately shadow-only here: forecasts are recorded but never
-authorize, reject, size, or place a trade.
-"""
+"""Optional Kronos M5 forecast adapter."""
 
 from __future__ import annotations
 
@@ -16,8 +12,15 @@ import mt5_client
 _predictor = None
 
 
+def mode():
+    configured = os.getenv("SWARM_KRONOS_MODE", "").strip().lower()
+    if configured in {"off", "shadow", "gate"}:
+        return configured
+    return "shadow" if os.getenv("SWARM_KRONOS_SHADOW", "off").strip().lower() == "on" else "off"
+
+
 def enabled():
-    return os.getenv("SWARM_KRONOS_SHADOW", "off").strip().lower() == "on"
+    return mode() != "off"
 
 
 def _load_predictor():

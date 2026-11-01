@@ -58,7 +58,7 @@ def order_volume(symbol):
     return default
 
 
-def decide(row, positions, blocks, limits, performance):
+def decide(row, positions, blocks, limits, performance, kronos_direction=None):
     symbol = row["symbol"]
     if any(block in symbol for block in blocks):
         return "hold", f"{symbol}: news block is active."
@@ -88,6 +88,15 @@ def decide(row, positions, blocks, limits, performance):
     if evidence["acted"] < 10 or evidence["accuracy"] < 0.55:
         return "hold", f"{symbol}: research accuracy {evidence['accuracy']} is below 0.55."
     side = "buy" if fast > slow else "sell"
+    if kronos_research.mode() == "gate":
+        if kronos_direction is None:
+            return "hold", f"{symbol}: Kronos forecast unavailable; trade blocked."
+        if kronos_direction != side:
+            return (
+                "hold",
+                f"{symbol}: Kronos forecast {kronos_direction} disagrees with "
+                f"strategy {side}.",
+            )
     stop = row["stop_buy"] if side == "buy" else row["stop_sell"]
     return side, f"{symbol}: {side}; fast {fast:.5f}, slow {slow:.5f}, stop {stop}."
 
@@ -101,27 +110,32 @@ def run_cycle():
     decisions = manage_positions(rows)
     positions = mt5_client.positions_rows()
     for row in rows:
+        kronos_direction = None
         if kronos_research.enabled():
             try:
                 forecast = kronos_research.forecast(row["symbol"])
+                kronos_direction = forecast["direction"]
                 journal.record(
-                    "kronos-shadow",
+                    "kronos",
                     forecast["direction"],
                     (
                         f"M5 close {forecast['last_close']:.5f} -> "
                         f"{forecast['predicted_close']:.5f} "
-                        f"({forecast['change']:+.5f}); shadow only."
+                        f"({forecast['change']:+.5f}); mode={kronos_research.mode()}."
                     ),
                     row["symbol"],
                 )
                 decisions.append(
-                    f"{row['symbol']}: Kronos shadow forecast {forecast['direction']}."
+                    f"{row['symbol']}: Kronos {kronos_research.mode()} forecast "
+                    f"{forecast['direction']}."
                 )
             except Exception as exc:
-                message = f"{row['symbol']}: Kronos shadow unavailable: {exc}"
-                journal.record("kronos-shadow", "unavailable", message, row["symbol"])
+                message = f"{row['symbol']}: Kronos unavailable: {exc}"
+                journal.record("kronos", "unavailable", message, row["symbol"])
                 decisions.append(message)
-        side, reason = decide(row, positions, blocks, limits, performance)
+        side, reason = decide(
+            row, positions, blocks, limits, performance, kronos_direction
+        )
         journal.record("coordinator", side, reason, row["symbol"])
         if side == "hold":
             decisions.append(reason)

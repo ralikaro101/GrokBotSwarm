@@ -44,10 +44,11 @@ also starts it for the current process, but does not persist after a restart.
 
 Agents: `market`, `risk`, `execution`, `news`, `journal`, `coordinator`.
 
-## Optional: Kronos shadow research
+## Optional: Kronos research
 
-Kronos forecasts are observational only: they are journaled alongside each
-cycle, but cannot authorize, reject, size, or submit an order.
+Kronos supports `shadow` mode (logging only) and `gate` mode. In `gate` mode,
+the existing strategy must agree with Kronos before an order is submitted. If
+Kronos is unavailable or disagrees, the bot holds.
 
 On the Ubuntu VPS:
 
@@ -60,10 +61,8 @@ pip install -r ~/Kronos/requirements.txt
 Then set in the VPS `.env`:
 
 ```ini
-SWARM_KRONOS_SHADOW=on
+SWARM_KRONOS_MODE=gate
 KRONOS_HOME=/home/ubuntu/Kronos
 ```
 
-The first cycle downloads the public Kronos-small model weights. Keep it in
-shadow mode and compare journaled predictions with subsequent candles before
-considering any future strategy change.
+The first cycle downloads the public Kronos-small model weights.
