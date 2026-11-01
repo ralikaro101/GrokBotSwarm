@@ -7,6 +7,7 @@ manual news blocks. It does not promise profitability.
 import os
 
 import journal
+import kronos_research
 import mt5_client
 
 
@@ -100,6 +101,26 @@ def run_cycle():
     decisions = manage_positions(rows)
     positions = mt5_client.positions_rows()
     for row in rows:
+        if kronos_research.enabled():
+            try:
+                forecast = kronos_research.forecast(row["symbol"])
+                journal.record(
+                    "kronos-shadow",
+                    forecast["direction"],
+                    (
+                        f"M5 close {forecast['last_close']:.5f} -> "
+                        f"{forecast['predicted_close']:.5f} "
+                        f"({forecast['change']:+.5f}); shadow only."
+                    ),
+                    row["symbol"],
+                )
+                decisions.append(
+                    f"{row['symbol']}: Kronos shadow forecast {forecast['direction']}."
+                )
+            except Exception as exc:
+                message = f"{row['symbol']}: Kronos shadow unavailable: {exc}"
+                journal.record("kronos-shadow", "unavailable", message, row["symbol"])
+                decisions.append(message)
         side, reason = decide(row, positions, blocks, limits, performance)
         journal.record("coordinator", side, reason, row["symbol"])
         if side == "hold":

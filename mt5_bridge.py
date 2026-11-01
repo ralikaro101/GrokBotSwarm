@@ -120,6 +120,25 @@ def research_view(symbol):
     return payload(True, symbol=symbol, samples=len(testing), acted=acted, accuracy=round(accuracy, 3), threshold=threshold)
 
 
+def candles_view(symbol, count):
+    count = max(32, min(int(count), 512))
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 1, count)
+    if rates is None or len(rates) < 32:
+        return payload(False, error="Not enough M5 candle history.", symbol=symbol)
+    candles = [
+        {
+            "time": int(bar["time"]),
+            "open": float(bar["open"]),
+            "high": float(bar["high"]),
+            "low": float(bar["low"]),
+            "close": float(bar["close"]),
+            "volume": float(bar["tick_volume"]),
+        }
+        for bar in rates
+    ]
+    return payload(True, symbol=symbol, timeframe="M5", candles=candles)
+
+
 
 def risk_view():
     account = account_view()
@@ -360,13 +379,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = self.path.split("?", 1)[0]
         symbol = SYMBOLS[0]
+        count = 400
         if "symbol=" in self.path:
             symbol = self.path.split("symbol=", 1)[1].split("&", 1)[0].upper()
+        if "count=" in self.path:
+            try:
+                count = int(self.path.split("count=", 1)[1].split("&", 1)[0])
+            except ValueError:
+                pass
         routes = {
             "/health": lambda: payload(True, terminal=mt5.terminal_info() is not None),
             "/account": account_view,
             "/watch": watch_view,
             "/research": lambda: research_view(symbol),
+            "/candles": lambda: candles_view(symbol, count),
             "/price": lambda: price_view(symbol),
             "/positions": positions_view,
             "/risk": risk_view,
