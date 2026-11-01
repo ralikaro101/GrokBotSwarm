@@ -4,6 +4,8 @@ This is intentionally small: moving-average trend, fixed risk limits, and
 manual news blocks. It does not promise profitability.
 """
 
+import os
+
 import journal
 import mt5_client
 
@@ -38,6 +40,21 @@ def manage_positions(rows):
             journal.record("trade-manager", "break-even", result, position["symbol"])
             actions.append(result)
     return actions
+
+
+def order_volume(symbol):
+    default = float(os.getenv("SWARM_ORDER_VOLUME", "0.01"))
+    for item in os.getenv("SWARM_ORDER_VOLUMES", "").split(","):
+        if ":" not in item:
+            continue
+        name, value = item.split(":", 1)
+        if name.strip().upper() != symbol.upper():
+            continue
+        try:
+            return float(value)
+        except ValueError:
+            break
+    return default
 
 
 def decide(row, positions, blocks, limits, performance):
@@ -90,7 +107,9 @@ def run_cycle():
             continue
         stop = row["stop_buy"] if side == "buy" else row["stop_sell"]
         try:
-            result = mt5_client.order_text(side, row["symbol"], 0.01, stop, "DEMO")
+            result = mt5_client.order_text(
+                side, row["symbol"], order_volume(row["symbol"]), stop, "DEMO"
+            )
         except mt5_client.BridgeError as exc:
             result = f"{row['symbol']}: order rejected: {exc}"
         journal.record("execution", side, result, row["symbol"])
