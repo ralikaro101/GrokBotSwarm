@@ -51,8 +51,13 @@ def decide(row, positions, blocks, limits, performance):
     if limits["daily_profit"] <= -limits["max_daily_loss"]:
         return "hold", f"{symbol}: daily loss limit is reached."
     spread = row["ask"] - row["bid"]
-    if spread > limits["max_spread"]:
-        return "hold", f"{symbol}: spread {spread:.5f} is too wide."
+    max_spread = limits.get("max_spreads", {}).get(
+        symbol, limits["max_spread"]
+    )
+    if spread > max_spread:
+        return "hold", (
+            f"{symbol}: spread {spread:.5f} exceeds limit {max_spread:.5f}."
+        )
     stats = performance.get(symbol, {})
     if stats.get("losses", 0) >= 3 and stats.get("profit", 0) < 0:
         return "hold", f"{symbol}: performance agent disabled it after losses."

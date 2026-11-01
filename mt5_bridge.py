@@ -20,6 +20,20 @@ MAX_VOLUME = float(os.getenv("MT5_MAX_VOLUME", "0.01"))
 NEWS_BLOCKS = {item.strip().upper() for item in os.getenv("MT5_NEWS_BLOCKS", "").split(",") if item.strip()}
 
 
+def spread_limits():
+    limits = {"*": float(os.getenv("MT5_MAX_SPREAD", "0.002"))}
+    raw = os.getenv("MT5_MAX_SPREADS", "")
+    for item in raw.split(","):
+        if not item.strip() or ":" not in item:
+            continue
+        symbol, value = item.split(":", 1)
+        try:
+            limits[symbol.strip().upper()] = float(value)
+        except ValueError:
+            continue
+    return limits
+
+
 def payload(ok, **data):
     body = {"ok": ok}
     body.update(data)
@@ -116,14 +130,15 @@ def risk_view():
         return positions
     max_positions = int(os.getenv("MT5_MAX_POSITIONS", "3"))
     max_daily_loss = float(os.getenv("MT5_MAX_DAILY_LOSS", "10"))
-    max_spread = float(os.getenv("MT5_MAX_SPREAD", "0.002"))
+    max_spreads = spread_limits()
     return payload(
         True,
         open_positions=positions["count"],
         max_positions=max_positions,
         daily_profit=account["profit"],
         max_daily_loss=max_daily_loss,
-        max_spread=max_spread,
+        max_spread=max_spreads["*"],
+        max_spreads={key: value for key, value in max_spreads.items() if key != "*"},
     )
 
 
