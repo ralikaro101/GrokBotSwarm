@@ -250,10 +250,33 @@ def modify_view(data):
         return payload(False, error="Position was not found.")
     position = rows[0]
     info = mt5.symbol_info(position.symbol)
+    if info is None:
+        return payload(False, error="Symbol information was not available.")
+    tick = mt5.symbol_info_tick(position.symbol)
+    if tick is None:
+        return payload(False, error="Current price was not available.")
+    stops_level = getattr(info, "trade_stops_level", 0) * info.point
+    if position.type == mt5.POSITION_TYPE_BUY:
+        if stop >= tick.bid:
+            return payload(False, error="Buy stop must be below the current bid.")
+        if stops_level and tick.bid - stop < stops_level:
+            return payload(False, error=f"Buy stop is inside the broker minimum distance ({stops_level}).")
+    else:
+        if stop <= tick.ask:
+            return payload(False, error="Sell stop must be above the current ask.")
+        if stops_level and stop - tick.ask < stops_level:
+            return payload(False, error=f"Sell stop is inside the broker minimum distance ({stops_level}).")
     request = {"action": mt5.TRADE_ACTION_SLTP, "position": ticket, "symbol": position.symbol, "sl": round(stop, info.digits), "tp": position.tp}
     result = mt5.order_send(request)
     if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
-        return payload(False, error="stop update rejected")
+        if result is None:
+            return payload(False, error="stop update rejected", detail=str(mt5.last_error()))
+        return payload(
+            False,
+            error=f"stop update rejected: {result.comment}",
+            retcode=result.retcode,
+            detail=str(mt5.last_error()),
+        )
     return payload(True, ticket=ticket, stop=request["sl"])
 
 

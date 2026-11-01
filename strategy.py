@@ -29,7 +29,12 @@ def manage_positions(rows):
         current = position["price_current"]
         profitable = (position["type"] == "buy" and current > entry) or (position["type"] == "sell" and current < entry)
         if profitable:
-            result = mt5_client.modify_stop(position["ticket"], entry)
+            try:
+                result = mt5_client.modify_stop(position["ticket"], entry)
+            except mt5_client.BridgeError as exc:
+                result = (
+                    f"{position['symbol']}: break-even stop not moved: {exc}"
+                )
             journal.record("trade-manager", "break-even", result, position["symbol"])
             actions.append(result)
     return actions
