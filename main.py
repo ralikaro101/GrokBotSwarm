@@ -17,13 +17,24 @@ tree = app_commands.CommandTree(bot)
 
 @bot.event
 async def on_ready():
+    global _auto_task
     await tree.sync()
+    if config.SWARM_AUTO and (_auto_task is None or _auto_task.done()):
+        _auto_task = asyncio.create_task(scheduled_cycle())
+        print(
+            "Automatic demo trading is enabled "
+            f"(every {config.SWARM_CYCLE_SECONDS} seconds)."
+        )
     print(f"GrokBotSwarm online as {bot.user}")
 
 
 @tree.command(name="status", description="Show swarm health")
 async def status(interaction: discord.Interaction):
-    connected = "configured" if config.MT5_BRIDGE_URL else "not configured"
+    connected = (
+        "configured"
+        if config.MT5_BRIDGE_URL and config.MT5_BRIDGE_TOKEN
+        else "not configured"
+    )
     await interaction.response.send_message(
         f"Online. {len(AGENTS)} agents loaded. MT5 bridge is {connected}."
     )
@@ -64,17 +75,21 @@ async def scheduled_cycle():
     while not bot.is_closed():
         if os.getenv("SWARM_AUTO", "").lower() == "on":
             try:
-                print(strategy.run_cycle())
+                print(await asyncio.to_thread(strategy.run_cycle))
             except Exception as exc:
                 print(f"Scheduled cycle failed: {exc}")
-        await asyncio.sleep(300)
+        await asyncio.sleep(config.SWARM_CYCLE_SECONDS)
 
 
 @tree.command(name="scheduler", description="Turn the five-minute demo cycle on or off")
 @app_commands.describe(state="on or off", confirmation="Type DEMO when turning on")
 async def scheduler(interaction: discord.Interaction, state: str, confirmation: str = ""):
     global _auto_task
-    enabled = state.lower() == "on"
+    requested_state = state.lower()
+    if requested_state not in {"on", "off"}:
+        await interaction.response.send_message("State must be `on` or `off`.")
+        return
+    enabled = requested_state == "on"
     if enabled and confirmation.upper() != "DEMO":
         await interaction.response.send_message("Turning the scheduler on requires DEMO.")
         return

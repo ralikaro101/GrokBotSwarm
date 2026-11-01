@@ -1,6 +1,8 @@
 ﻿# GrokBotSwarm
 
-Discord control plane for a six-agent trading swarm. This machine holds the code. MetaTrader 5 stays on the Windows host; this service does not place orders.
+Discord control plane for a six-agent **demo-trading** swarm. MetaTrader 5 stays
+on the Windows host. Orders are sent only through the local MT5 bridge, which
+rejects non-demo accounts.
 
 ## Run locally
 
@@ -12,13 +14,32 @@ Copy-Item .env.example .env
 python main.py
 ```
 
-Put the Discord bot token in `.env` as `DISCORD_TOKEN`.
+Configure `.env`:
+
+```ini
+DISCORD_TOKEN=...
+MT5_BRIDGE_URL=http://127.0.0.1:8765
+MT5_BRIDGE_TOKEN=the-same-secret-used-by-the-bridge
+SWARM_AUTO=on
+SWARM_CYCLE_SECONDS=300
+```
+
+Start the bridge on the MT5 Windows host in a separate terminal:
+
+```powershell
+$env:MT5_BRIDGE_TOKEN = "the-same-secret-used-by-the-bot"
+python mt5_bridge.py
+```
+
+With `SWARM_AUTO=on`, the bot starts a cycle immediately after Discord connects
+and repeats it every `SWARM_CYCLE_SECONDS`. The `/scheduler on DEMO` command
+also starts it for the current process, but does not persist after a restart.
 
 ## Commands
 
-- `!status` swarm health
-- `!agents` the six agents
-- `!ask <agent> <question>` one agent answers
-- `!brief` all six agents answer
+- `/status` swarm health
+- `/scheduler on DEMO` enable the current process
+- `/auto DEMO` run one decision cycle now
+- `/watch`, `/positions`, `/account` inspect MT5
 
 Agents: `market`, `risk`, `execution`, `news`, `journal`, `coordinator`.
