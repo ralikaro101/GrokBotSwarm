@@ -44,6 +44,11 @@ also starts it for the current process, but does not persist after a restart.
 
 Agents: `market`, `risk`, `execution`, `news`, `journal`, `coordinator`.
 
+The bridge evaluates each symbol's closed trades over a configurable rolling
+window (7 days by default). A symbol needs at least 5 closed trades and 3
+losses with negative net profit to enter a temporary 12-hour performance
+cooldown. It is automatically eligible again after the cooldown expires.
+
 ## Optional: Kronos research
 
 Kronos supports `shadow` mode (logging only) and `gate` mode. In `gate` mode,

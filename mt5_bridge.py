@@ -162,19 +162,54 @@ def risk_view():
 
 
 def performance_view():
-    deals = mt5.history_deals_get(mt5.datetime(2020, 1, 1), mt5.datetime.now()) if False else None
     from datetime import datetime, timedelta
+
     end = datetime.now()
-    start = end - timedelta(days=30)
+    window_days = max(1, int(os.getenv("MT5_PERFORMANCE_WINDOW_DAYS", "7")))
+    min_trades = max(1, int(os.getenv("MT5_PERFORMANCE_MIN_TRADES", "5")))
+    loss_threshold = max(1, int(os.getenv("MT5_PERFORMANCE_LOSS_THRESHOLD", "3")))
+    cooldown_hours = max(0.0, float(os.getenv("MT5_PERFORMANCE_COOLDOWN_HOURS", "12")))
+    start = end - timedelta(days=window_days)
     deals = mt5.history_deals_get(start, end)
     totals = {}
     if deals:
         for deal in deals:
             if deal.entry != mt5.DEAL_ENTRY_OUT:
                 continue
-            item = totals.setdefault(deal.symbol, {"wins": 0, "losses": 0, "profit": 0.0})
+            item = totals.setdefault(
+                deal.symbol,
+                {
+                    "wins": 0,
+                    "losses": 0,
+                    "trades": 0,
+                    "profit": 0.0,
+                    "latest_loss": None,
+                },
+            )
+            item["trades"] += 1
             item["profit"] += float(deal.profit)
-            item["wins" if deal.profit >= 0 else "losses"] += 1
+            if deal.profit >= 0:
+                item["wins"] += 1
+            else:
+                item["losses"] += 1
+                item["latest_loss"] = max(item["latest_loss"] or 0, int(deal.time))
+
+    cooldown_seconds = cooldown_hours * 3600
+    for item in totals.values():
+        in_loss_cooldown = (
+            item["trades"] >= min_trades
+            and item["losses"] >= loss_threshold
+            and item["profit"] < 0
+            and item["latest_loss"] is not None
+            and (end.timestamp() - item["latest_loss"]) < cooldown_seconds
+        )
+        item["disabled"] = in_loss_cooldown
+        if in_loss_cooldown:
+            item["cooldown_remaining_hours"] = round(
+                max(0.0, cooldown_seconds - (end.timestamp() - item["latest_loss"])) / 3600,
+                2,
+            )
+        item.pop("latest_loss", None)
     return payload(True, symbols=totals)
 
 

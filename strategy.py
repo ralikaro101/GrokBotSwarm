@@ -77,7 +77,7 @@ def decide(row, positions, blocks, limits, performance, kronos_direction=None):
             f"{symbol}: spread {spread:.5f} exceeds limit {max_spread:.5f}."
         )
     stats = performance.get(symbol, {})
-    if stats.get("losses", 0) >= 3 and stats.get("profit", 0) < 0:
+    if stats.get("disabled", False):
         return "hold", f"{symbol}: performance agent disabled it after losses."
     fast = row.get("fast")
     slow = row.get("slow")
