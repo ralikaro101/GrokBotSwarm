@@ -5,7 +5,10 @@ Orders are demo-only, require a stop, and are capped by MT5_MAX_VOLUME.
 
 import json
 import os
+from math import floor
+from datetime import datetime, time, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from zoneinfo import ZoneInfo
 
 import MetaTrader5 as mt5
 from dotenv import load_dotenv
@@ -57,6 +60,45 @@ def account_view():
         margin_free=info.margin_free,
         profit=info.profit,
     )
+
+
+def daily_drawdown_view(account):
+    """Return today's New York-session P/L and whether new entries are locked."""
+    timezone_name = os.getenv("MT5_DAILY_DRAWDOWN_TIMEZONE", "America/New_York").strip()
+    try:
+        local_timezone = ZoneInfo(timezone_name)
+    except Exception:
+        local_timezone = timezone.utc
+    now = datetime.now(local_timezone)
+    start_local = datetime.combine(now.date(), time.min, tzinfo=local_timezone)
+    start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = now.astimezone(timezone.utc).replace(tzinfo=None)
+    realized = 0.0
+    deals = mt5.history_deals_get(start_utc, end_utc)
+    if deals:
+        for deal in deals:
+            if deal.entry == mt5.DEAL_ENTRY_OUT:
+                realized += float(deal.profit) + float(deal.commission) + float(deal.swap)
+    start_balance = float(account["balance"]) - realized
+    current_pnl = realized + float(account["profit"])
+    drawdown_percent = (
+        max(0.0, -current_pnl / start_balance * 100)
+        if start_balance > 0
+        else 0.0
+    )
+    limit_percent = max(
+        0.0, float(os.getenv("MT5_MAX_DAILY_DRAWDOWN_PERCENT", "2.8"))
+    )
+    return {
+        "timezone": timezone_name,
+        "start": start_local.isoformat(),
+        "realized_profit": round(realized, 2),
+        "floating_profit": round(float(account["profit"]), 2),
+        "daily_profit": round(current_pnl, 2),
+        "drawdown_percent": round(drawdown_percent, 3),
+        "limit_percent": limit_percent,
+        "trading_locked": limit_percent > 0 and drawdown_percent >= limit_percent,
+    }
 
 
 def tick_for(symbol):
@@ -150,12 +192,15 @@ def risk_view():
     max_positions = int(os.getenv("MT5_MAX_POSITIONS", "3"))
     max_daily_loss = float(os.getenv("MT5_MAX_DAILY_LOSS", "10"))
     max_spreads = spread_limits()
+    daily_drawdown = daily_drawdown_view(account)
     return payload(
         True,
         open_positions=positions["count"],
         max_positions=max_positions,
         daily_profit=account["profit"],
         max_daily_loss=max_daily_loss,
+        daily_drawdown=daily_drawdown,
+        trading_locked=daily_drawdown["trading_locked"],
         max_spread=max_spreads["*"],
         max_spreads={key: value for key, value in max_spreads.items() if key != "*"},
     )
@@ -258,10 +303,48 @@ def normalize_volume(symbol, volume):
     return normalized, ""
 
 
+def volume_for_risk(symbol, side, price, stop, risk_percent, equity):
+    """Calculate a broker-valid volume whose stop loss risks no more than the target."""
+    if risk_percent <= 0:
+        return None, "Risk percent must be greater than zero."
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        return None, "Symbol is not available."
+    trade_type = mt5.ORDER_TYPE_BUY if side == "buy" else mt5.ORDER_TYPE_SELL
+    one_lot_loss = mt5.order_calc_profit(
+        trade_type, symbol, 1.0, price, stop
+    )
+    if one_lot_loss is None or one_lot_loss >= 0:
+        return None, f"Could not calculate stop-loss risk: {mt5.last_error()}."
+    target_loss = equity * risk_percent / 100
+    raw_volume = target_loss / abs(one_lot_loss)
+    ceiling = max(info.volume_min, min(info.volume_max, MAX_VOLUME))
+    raw_volume = min(raw_volume, ceiling)
+    if raw_volume < info.volume_min:
+        return None, (
+            f"Risk target {target_loss:.2f} is below the minimum-volume "
+            f"risk for {symbol}."
+        )
+    steps = floor((raw_volume - info.volume_min) / info.volume_step)
+    volume = round(info.volume_min + steps * info.volume_step, 8)
+    return normalize_volume(symbol, volume)
+
+
 def order_view(data):
     account = account_view()
     if not account["ok"]:
         return account
+    daily_drawdown = daily_drawdown_view(account)
+    if daily_drawdown["trading_locked"]:
+        return payload(
+            False,
+            error=(
+                "New trades are locked for the current New York day: "
+                f"daily drawdown {daily_drawdown['drawdown_percent']:.3f}% "
+                f"reached the {daily_drawdown['limit_percent']:.3f}% limit."
+            ),
+            daily_drawdown=daily_drawdown,
+        )
     if str(data.get("confirmation", "")).upper() != "DEMO":
         return payload(False, error="Confirmation must be DEMO.")
     side = str(data.get("side", "")).lower()
@@ -269,13 +352,9 @@ def order_view(data):
     if side not in {"buy", "sell"} or symbol not in SYMBOLS:
         return payload(False, error="Order must use buy or sell and a watched symbol.")
     try:
-        volume = float(data.get("volume"))
         stop = float(data.get("stop"))
     except (TypeError, ValueError):
-        return payload(False, error="Volume and stop must be numbers.")
-    volume, error = normalize_volume(symbol, volume)
-    if error:
-        return payload(False, error=error)
+        return payload(False, error="Stop must be a number.")
     info, tick = tick_for(symbol)
     if info is None or tick is None:
         return payload(False, error=str(mt5.last_error()))
@@ -284,6 +363,22 @@ def order_view(data):
         return payload(False, error="Buy stop must be below the ask.")
     if side == "sell" and stop <= price:
         return payload(False, error="Sell stop must be above the bid.")
+    risk_percent = data.get("risk_percent")
+    if risk_percent is not None:
+        try:
+            volume, error = volume_for_risk(
+                symbol, side, price, stop, float(risk_percent), account["equity"]
+            )
+        except (TypeError, ValueError):
+            return payload(False, error="Risk percent must be a number.")
+    else:
+        try:
+            volume = float(data.get("volume"))
+        except (TypeError, ValueError):
+            return payload(False, error="Volume must be a number.")
+        volume, error = normalize_volume(symbol, volume)
+    if error:
+        return payload(False, error=error)
     trade_type = mt5.ORDER_TYPE_BUY if side == "buy" else mt5.ORDER_TYPE_SELL
     request = {
         "action": mt5.TRADE_ACTION_DEAL,

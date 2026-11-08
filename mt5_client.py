@@ -86,18 +86,21 @@ def positions_text():
     return f"{body['count']} open position(s)\n" + "\n".join(lines)
 
 
-def order_text(side, symbol, volume, stop, confirmation):
+def order_text(side, symbol, volume, stop, confirmation, risk_percent=None):
+    data = {
+        "side": side,
+        "symbol": symbol.upper(),
+        "volume": volume,
+        "stop": stop,
+        "confirmation": confirmation,
+    }
+    if risk_percent is not None:
+        data["risk_percent"] = risk_percent
     body = require_ok(
         request_json(
             "/order",
             "POST",
-            {
-                "side": side,
-                "symbol": symbol.upper(),
-                "volume": volume,
-                "stop": stop,
-                "confirmation": confirmation,
-            },
+            data,
         ),
         "order failed",
     )

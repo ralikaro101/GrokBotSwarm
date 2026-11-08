@@ -5,16 +5,48 @@ manual news blocks. It does not promise profitability.
 """
 
 import os
+from datetime import datetime, time, timezone
+from zoneinfo import ZoneInfo
 
 import journal
 import kronos_research
 import mt5_client
 
 
+def weekend_close_active(now=None):
+    """Return whether the configured Friday weekend cutoff has been reached."""
+    timezone_name = os.getenv("SWARM_WEEKEND_TIMEZONE", "UTC").strip() or "UTC"
+    try:
+        local_timezone = ZoneInfo(timezone_name)
+    except Exception:
+        local_timezone = timezone.utc
+    current = now or datetime.now(local_timezone)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=local_timezone)
+    else:
+        current = current.astimezone(local_timezone)
+    try:
+        cutoff = time(
+            hour=int(os.getenv("SWARM_WEEKEND_CLOSE_FRIDAY_HOUR", "20")),
+            minute=int(os.getenv("SWARM_WEEKEND_CLOSE_FRIDAY_MINUTE", "0")),
+        )
+    except ValueError:
+        cutoff = time(20, 0)
+    return current.weekday() == 4 and current.time() >= cutoff or current.weekday() in {5, 6}
+
+
 def manage_positions(rows):
     actions = []
     by_symbol = {row["symbol"]: row for row in rows}
     for position in mt5_client.positions_rows():
+        if weekend_close_active():
+            try:
+                result = mt5_client.close_text(position["ticket"], "DEMO")
+            except mt5_client.BridgeError as exc:
+                result = f"{position['symbol']}: weekend close failed: {exc}"
+            journal.record("trade-manager", "weekend-close", result, position["symbol"])
+            actions.append(result)
+            continue
         row = by_symbol.get(position["symbol"])
         if row is None:
             continue
@@ -58,8 +90,17 @@ def order_volume(symbol):
     return default
 
 
+def order_risk_percent():
+    try:
+        return max(0.0, float(os.getenv("SWARM_RISK_PERCENT", "0")))
+    except ValueError:
+        return 0.0
+
+
 def decide(row, positions, blocks, limits, performance, kronos_direction=None):
     symbol = row["symbol"]
+    if weekend_close_active():
+        return "hold", f"{symbol}: weekend trading cutoff is active."
     if any(block in symbol for block in blocks):
         return "hold", f"{symbol}: news block is active."
     if any(item["symbol"] == symbol for item in positions):
@@ -68,6 +109,12 @@ def decide(row, positions, blocks, limits, performance, kronos_direction=None):
         return "hold", f"{symbol}: position cap {limits['max_positions']} is reached."
     if limits["daily_profit"] <= -limits["max_daily_loss"]:
         return "hold", f"{symbol}: daily loss limit is reached."
+    if limits.get("trading_locked", False):
+        drawdown = limits.get("daily_drawdown", {})
+        return "hold", (
+            f"{symbol}: New York daily drawdown lock is active "
+            f"({drawdown.get('drawdown_percent', '?')}%)."
+        )
     spread = row["ask"] - row["bid"]
     max_spread = limits.get("max_spreads", {}).get(
         symbol, limits["max_spread"]
@@ -142,8 +189,14 @@ def run_cycle():
             continue
         stop = row["stop_buy"] if side == "buy" else row["stop_sell"]
         try:
+            risk_percent = order_risk_percent()
             result = mt5_client.order_text(
-                side, row["symbol"], order_volume(row["symbol"]), stop, "DEMO"
+                side,
+                row["symbol"],
+                None if risk_percent else order_volume(row["symbol"]),
+                stop,
+                "DEMO",
+                risk_percent=risk_percent or None,
             )
         except mt5_client.BridgeError as exc:
             result = f"{row['symbol']}: order rejected: {exc}"
