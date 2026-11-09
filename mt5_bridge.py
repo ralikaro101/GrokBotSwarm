@@ -361,6 +361,22 @@ def positions_view():
             "price_current": row.price_current,
             "sl": row.sl,
             "profit": row.profit,
+            "risk_to_stop": abs(
+                float(
+                    mt5.order_calc_profit(
+                        mt5.ORDER_TYPE_BUY
+                        if row.type == mt5.POSITION_TYPE_BUY
+                        else mt5.ORDER_TYPE_SELL,
+                        row.symbol,
+                        row.volume,
+                        row.price_open,
+                        row.sl,
+                    )
+                    or 0
+                )
+            )
+            if row.sl
+            else 0.0,
         }
         for row in rows
     ]

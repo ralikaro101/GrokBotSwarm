@@ -76,46 +76,32 @@ def us500_vix_allows(vix):
 
 
 def trailing_stop(position):
-    """Return a one-percentage-point trailing stop after +3% price movement."""
+    """Trail by R-multiple: trigger at 1R and keep 0.5R behind."""
+    risk_state = position.get("risk_state")
+    if not risk_state:
+        return None
     try:
-        trigger = max(
-            0.0,
-            float(
-                os.getenv(
-                    "SWARM_TRAIL_TRIGGER_PERCENT",
-                    os.getenv("SWARM_XAU_TRAIL_TRIGGER_PERCENT", "1"),
-                )
-            ),
-        )
-        gap = max(
-            0.0,
-            float(
-                os.getenv(
-                    "SWARM_TRAIL_GAP_PERCENT",
-                    os.getenv("SWARM_XAU_TRAIL_GAP_PERCENT", "0.5"),
-                )
-            ),
-        )
+        trigger = max(0.0, float(os.getenv("SWARM_TRAIL_TRIGGER_R", "1")))
+        gap = max(0.0, float(os.getenv("SWARM_TRAIL_GAP_R", "0.5")))
     except ValueError:
-        trigger, gap = 3.0, 1.0
+        trigger, gap = 1.0, 0.5
     entry = float(position["price_open"])
-    current = float(position["price_current"])
-    if entry <= 0:
+    risk_amount = float(risk_state["risk_amount"])
+    initial_stop = float(risk_state["initial_stop"])
+    current_profit = float(position["profit"])
+    price_risk = abs(entry - initial_stop)
+    if entry <= 0 or risk_amount <= 0 or price_risk <= 0:
         return None
-    favorable_percent = (
-        (current - entry) / entry * 100
-        if position["type"] == "buy"
-        else (entry - current) / entry * 100
-    )
-    if favorable_percent < trigger:
+    reward_risk = current_profit / risk_amount
+    if reward_risk < trigger:
         return None
-    locked_percent = max(0.0, favorable_percent - gap)
+    locked_r = max(0.0, reward_risk - gap)
     if position["type"] == "buy":
-        target = entry * (1 + locked_percent / 100)
+        target = entry + price_risk * locked_r
         if float(position.get("sl") or 0) >= target:
             return None
     else:
-        target = entry * (1 - locked_percent / 100)
+        target = entry - price_risk * locked_r
         current_stop = float(position.get("sl") or 0)
         if current_stop and current_stop <= target:
             return None
@@ -147,6 +133,7 @@ def manage_positions(rows):
             journal.record("trade-manager", "close", result, position["symbol"])
             actions.append(result)
             continue
+        position["risk_state"] = journal.position_risk(position)
         new_stop = trailing_stop(position)
         if new_stop is not None:
             try:

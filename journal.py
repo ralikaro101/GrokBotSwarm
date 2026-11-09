@@ -38,6 +38,18 @@ def connect():
         )
         """
     )
+    conn.execute(
+        """
+        create table if not exists position_risk (
+            ticket integer primary key,
+            symbol text not null,
+            side text not null,
+            entry_price real not null,
+            initial_stop real not null,
+            risk_amount real not null
+        )
+        """
+    )
     return conn
 
 
@@ -129,3 +141,41 @@ def symbol_performance():
         )
         results[item["symbol"]] = item
     return results
+
+
+def position_risk(position):
+    """Persist and return the original stop/risk for an open position."""
+    ticket = int(position["ticket"])
+    with connect() as conn:
+        row = conn.execute(
+            "select * from position_risk where ticket = ?", (ticket,)
+        ).fetchone()
+        if row:
+            return dict(row)
+        initial_stop = float(position.get("sl") or 0)
+        risk_amount = float(position.get("risk_to_stop") or 0)
+        if initial_stop <= 0 or risk_amount <= 0:
+            return None
+        conn.execute(
+            """
+            insert into position_risk(
+                ticket, symbol, side, entry_price, initial_stop, risk_amount
+            ) values (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ticket,
+                position["symbol"],
+                position["type"],
+                float(position["price_open"]),
+                initial_stop,
+                risk_amount,
+            ),
+        )
+    return {
+        "ticket": ticket,
+        "symbol": position["symbol"],
+        "side": position["type"],
+        "entry_price": float(position["price_open"]),
+        "initial_stop": initial_stop,
+        "risk_amount": risk_amount,
+    }
