@@ -275,14 +275,14 @@ def decide(
     if evidence["acted"] < 10 or evidence["accuracy"] < 0.55:
         return "hold", f"{symbol}: research accuracy {evidence['accuracy']} is below 0.55."
     side = "buy" if fast > slow else "sell"
-    if kronos_research.mode() == "gate":
+    if os.getenv("SWARM_KRONOS_REQUIRED", "on").strip().lower() == "on" or kronos_research.mode() == "gate":
         if kronos_direction is None:
-            return "hold", f"{symbol}: Kronos forecast unavailable; trade blocked."
+            return "hold", f"{symbol}: Kronos M1 forecast unavailable; trade blocked."
         if kronos_direction != side:
             return (
                 "hold",
-                f"{symbol}: Kronos forecast {kronos_direction} disagrees with "
-                f"strategy {side}.",
+                f"{symbol}: Kronos M1 forecast {kronos_direction} disagrees with "
+                f"EMA 9/21 direction {side}.",
             )
     stop = row["stop_buy"] if side == "buy" else row["stop_sell"]
     return side, f"{symbol}: {side}; fast {fast:.5f}, slow {slow:.5f}, stop {stop}."
@@ -306,23 +306,25 @@ def run_cycle():
     positions = mt5_client.positions_rows()
     for row in rows:
         kronos_direction = None
-        if kronos_research.enabled():
+        kronos_required = os.getenv("SWARM_KRONOS_REQUIRED", "on").strip().lower() == "on"
+        if kronos_research.enabled() or kronos_required:
             try:
                 forecast = kronos_research.forecast(row["symbol"])
+                if forecast is None:
+                    raise RuntimeError("Kronos is disabled.")
                 kronos_direction = forecast["direction"]
                 journal.record(
                     "kronos",
                     forecast["direction"],
                     (
-                        f"M5 close {forecast['last_close']:.5f} -> "
+                        f"M1 close {forecast['last_close']:.5f} -> "
                         f"{forecast['predicted_close']:.5f} "
-                        f"({forecast['change']:+.5f}); mode={kronos_research.mode()}."
+                        f"({forecast['change']:+.5f}); mandatory agreement."
                     ),
                     row["symbol"],
                 )
                 decisions.append(
-                    f"{row['symbol']}: Kronos {kronos_research.mode()} forecast "
-                    f"{forecast['direction']}."
+                    f"{row['symbol']}: Kronos M1 forecast {forecast['direction']}."
                 )
             except Exception as exc:
                 message = f"{row['symbol']}: Kronos unavailable: {exc}"

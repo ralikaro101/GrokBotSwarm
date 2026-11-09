@@ -109,12 +109,20 @@ def tick_for(symbol):
     return mt5.symbol_info(symbol), mt5.symbol_info_tick(symbol)
 
 
+def ema(values, period):
+    multiplier = 2 / (period + 1)
+    result = float(values[0])
+    for value in values[1:]:
+        result = (float(value) - result) * multiplier + result
+    return result
+
+
 def average(symbol):
-    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 0, 30)
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 60)
     if rates is None or len(rates) < 30:
         return None, None
     closes = [float(bar["close"]) for bar in rates]
-    return sum(closes[-8:]) / 8, sum(closes) / len(closes)
+    return ema(closes, 9), ema(closes, 21)
 
 
 def price_view(symbol):
@@ -190,9 +198,13 @@ def research_view(symbol):
     return payload(True, symbol=symbol, samples=len(testing), acted=acted, accuracy=round(accuracy, 3), threshold=threshold)
 
 
-def candles_view(symbol, count):
+def candles_view(symbol, count, timeframe_name="M1"):
     count = max(32, min(int(count), 512))
-    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 1, count)
+    timeframes = {"M1": mt5.TIMEFRAME_M1, "M5": mt5.TIMEFRAME_M5}
+    timeframe = timeframes.get(timeframe_name.upper())
+    if timeframe is None:
+        return payload(False, error="Unsupported candle timeframe.", symbol=symbol)
+    rates = mt5.copy_rates_from_pos(symbol, timeframe, 1, count)
     if rates is None or len(rates) < 32:
         return payload(False, error="Not enough M5 candle history.", symbol=symbol)
     candles = [
@@ -206,7 +218,7 @@ def candles_view(symbol, count):
         }
         for bar in rates
     ]
-    return payload(True, symbol=symbol, timeframe="M5", candles=candles)
+    return payload(True, symbol=symbol, timeframe=timeframe_name.upper(), candles=candles)
 
 
 
@@ -581,6 +593,7 @@ class Handler(BaseHTTPRequestHandler):
             count = int(query.get("count", [400])[0])
         except ValueError:
             count = 400
+        timeframe = query.get("timeframe", ["M1"])[0].upper()
         try:
             history_days = int(query.get("days", [90])[0])
         except ValueError:
@@ -590,7 +603,7 @@ class Handler(BaseHTTPRequestHandler):
             "/account": account_view,
             "/watch": watch_view,
             "/research": lambda: research_view(symbol),
-            "/candles": lambda: candles_view(symbol, count),
+            "/candles": lambda: candles_view(symbol, count, timeframe),
             "/price": lambda: price_view(symbol),
             "/vix": vix_view,
             "/positions": positions_view,

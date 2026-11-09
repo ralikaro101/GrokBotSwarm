@@ -129,8 +129,10 @@ def vix():
     return require_ok(request_json("/vix"), "VIX request failed")
 
 
-def candles(symbol, count=400):
-    query = urlencode({"symbol": symbol.upper(), "count": count})
+def candles(symbol, count=400, timeframe="M1"):
+    query = urlencode(
+        {"symbol": symbol.upper(), "count": count, "timeframe": timeframe}
+    )
     return require_ok(request_json("/candles?" + query), "candles request failed")["candles"]
 
 
