@@ -347,6 +347,7 @@ def positions_view():
             "volume": row.volume,
             "price_open": row.price_open,
             "price_current": row.price_current,
+            "sl": row.sl,
             "profit": row.profit,
         }
         for row in rows

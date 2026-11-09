@@ -75,6 +75,39 @@ def us500_vix_allows(vix):
     )
 
 
+def xau_trailing_stop(position):
+    """Return a one-percentage-point trailing stop after +3% price movement."""
+    if position["symbol"] != "XAUUSD":
+        return None
+    try:
+        trigger = max(0.0, float(os.getenv("SWARM_XAU_TRAIL_TRIGGER_PERCENT", "3")))
+        gap = max(0.0, float(os.getenv("SWARM_XAU_TRAIL_GAP_PERCENT", "1")))
+    except ValueError:
+        trigger, gap = 3.0, 1.0
+    entry = float(position["price_open"])
+    current = float(position["price_current"])
+    if entry <= 0:
+        return None
+    favorable_percent = (
+        (current - entry) / entry * 100
+        if position["type"] == "buy"
+        else (entry - current) / entry * 100
+    )
+    if favorable_percent < trigger:
+        return None
+    locked_percent = max(0.0, favorable_percent - gap)
+    if position["type"] == "buy":
+        target = entry * (1 + locked_percent / 100)
+        if float(position.get("sl") or 0) >= target:
+            return None
+    else:
+        target = entry * (1 - locked_percent / 100)
+        current_stop = float(position.get("sl") or 0)
+        if current_stop and current_stop <= target:
+            return None
+    return target
+
+
 def manage_positions(rows):
     actions = []
     by_symbol = {row["symbol"]: row for row in rows}
@@ -98,6 +131,15 @@ def manage_positions(rows):
         if reversed_buy or reversed_sell:
             result = mt5_client.close_text(position["ticket"], "DEMO")
             journal.record("trade-manager", "close", result, position["symbol"])
+            actions.append(result)
+            continue
+        trailing_stop = xau_trailing_stop(position)
+        if trailing_stop is not None:
+            try:
+                result = mt5_client.modify_stop(position["ticket"], trailing_stop)
+            except mt5_client.BridgeError as exc:
+                result = f"{position['symbol']}: trailing stop not moved: {exc}"
+            journal.record("trade-manager", "xau-trailing-stop", result, position["symbol"])
             actions.append(result)
             continue
         entry = position["price_open"]
