@@ -75,13 +75,27 @@ def us500_vix_allows(vix):
     )
 
 
-def xau_trailing_stop(position):
+def trailing_stop(position):
     """Return a one-percentage-point trailing stop after +3% price movement."""
-    if position["symbol"] != "XAUUSD":
-        return None
     try:
-        trigger = max(0.0, float(os.getenv("SWARM_XAU_TRAIL_TRIGGER_PERCENT", "3")))
-        gap = max(0.0, float(os.getenv("SWARM_XAU_TRAIL_GAP_PERCENT", "1")))
+        trigger = max(
+            0.0,
+            float(
+                os.getenv(
+                    "SWARM_TRAIL_TRIGGER_PERCENT",
+                    os.getenv("SWARM_XAU_TRAIL_TRIGGER_PERCENT", "1"),
+                )
+            ),
+        )
+        gap = max(
+            0.0,
+            float(
+                os.getenv(
+                    "SWARM_TRAIL_GAP_PERCENT",
+                    os.getenv("SWARM_XAU_TRAIL_GAP_PERCENT", "0.5"),
+                )
+            ),
+        )
     except ValueError:
         trigger, gap = 3.0, 1.0
     entry = float(position["price_open"])
@@ -133,13 +147,13 @@ def manage_positions(rows):
             journal.record("trade-manager", "close", result, position["symbol"])
             actions.append(result)
             continue
-        trailing_stop = xau_trailing_stop(position)
-        if trailing_stop is not None:
+        new_stop = trailing_stop(position)
+        if new_stop is not None:
             try:
-                result = mt5_client.modify_stop(position["ticket"], trailing_stop)
+                result = mt5_client.modify_stop(position["ticket"], new_stop)
             except mt5_client.BridgeError as exc:
                 result = f"{position['symbol']}: trailing stop not moved: {exc}"
-            journal.record("trade-manager", "xau-trailing-stop", result, position["symbol"])
+            journal.record("trade-manager", "trailing-stop", result, position["symbol"])
             actions.append(result)
             continue
         entry = position["price_open"]
