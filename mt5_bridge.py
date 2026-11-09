@@ -139,6 +139,33 @@ def price_view(symbol):
 
 
 
+def vix_view():
+    symbol = os.getenv("MT5_VIX_SYMBOL", "VIX_X6").strip().upper()
+    info, tick = tick_for(symbol)
+    if info is None or tick is None:
+        return payload(False, error=str(mt5.last_error()), symbol=symbol)
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 1, 1)
+    if rates is None or len(rates) < 1:
+        return payload(False, error="VIX daily history was unavailable.", symbol=symbol)
+    value = float(tick.bid)
+    expected_move = value / 16
+    previous_close = float(rates[0]["close"])
+    return payload(
+        True,
+        symbol=symbol,
+        value=value,
+        previous_close=previous_close,
+        expected_daily_move_percent=round(expected_move, 4),
+        expected_daily_move_points=round(previous_close * expected_move / 100, 4),
+        regime=(
+            "low" if value < 14 else
+            "normal" if value < 20 else
+            "elevated" if value < 30 else
+            "panic"
+        ),
+    )
+
+
 def research_view(symbol):
     rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 1, 240)
     if rates is None or len(rates) < 80:
@@ -564,6 +591,7 @@ class Handler(BaseHTTPRequestHandler):
             "/research": lambda: research_view(symbol),
             "/candles": lambda: candles_view(symbol, count),
             "/price": lambda: price_view(symbol),
+            "/vix": vix_view,
             "/positions": positions_view,
             "/risk": risk_view,
             "/performance": performance_view,

@@ -125,6 +125,10 @@ def research(symbol):
     return require_ok(request_json("/research?symbol=" + symbol.upper()), "research failed")
 
 
+def vix():
+    return require_ok(request_json("/vix"), "VIX request failed")
+
+
 def candles(symbol, count=400):
     query = urlencode({"symbol": symbol.upper(), "count": count})
     return require_ok(request_json("/candles?" + query), "candles request failed")["candles"]

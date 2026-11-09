@@ -35,6 +35,46 @@ def weekend_close_active(now=None):
     return current.weekday() == 4 and current.time() >= cutoff or current.weekday() in {5, 6}
 
 
+def new_york_session_active(now=None):
+    timezone_name = os.getenv("SWARM_SESSION_TIMEZONE", "America/New_York").strip()
+    try:
+        local_timezone = ZoneInfo(timezone_name)
+    except Exception:
+        local_timezone = timezone.utc
+    current = now or datetime.now(local_timezone)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=local_timezone)
+    else:
+        current = current.astimezone(local_timezone)
+    if current.weekday() > 4:
+        return False
+    try:
+        start = time(
+            int(os.getenv("SWARM_US500_SESSION_START_HOUR", "9")),
+            int(os.getenv("SWARM_US500_SESSION_START_MINUTE", "30")),
+        )
+        end = time(
+            int(os.getenv("SWARM_US500_SESSION_END_HOUR", "16")),
+            int(os.getenv("SWARM_US500_SESSION_END_MINUTE", "0")),
+        )
+    except ValueError:
+        start, end = time(9, 30), time(16, 0)
+    return start <= current.time() < end
+
+
+def us500_vix_allows(vix):
+    maximum = max(0.0, float(os.getenv("SWARM_US500_MAX_VIX", "30")))
+    if vix["value"] >= maximum:
+        return False, (
+            f"US500: VIX {vix['value']:.2f} is in the {vix['regime']} regime; "
+            f"maximum allowed is {maximum:.2f}."
+        )
+    return True, (
+        f"US500: VIX {vix['value']:.2f}, regime {vix['regime']}, "
+        f"expected daily move {vix['expected_daily_move_percent']:.2f}%."
+    )
+
+
 def manage_positions(rows):
     actions = []
     by_symbol = {row["symbol"]: row for row in rows}
@@ -121,10 +161,27 @@ def learning_allows(symbol, learning):
     )
 
 
-def decide(row, positions, blocks, limits, performance, learning, kronos_direction=None):
+def decide(
+    row,
+    positions,
+    blocks,
+    limits,
+    performance,
+    learning,
+    kronos_direction=None,
+    vix_data=None,
+):
     symbol = row["symbol"]
     if weekend_close_active():
         return "hold", f"{symbol}: weekend trading cutoff is active."
+    if symbol == "US500":
+        if not new_york_session_active():
+            return "hold", "US500: outside the New York cash session."
+        if not vix_data:
+            return "hold", "US500: VIX data unavailable; trade blocked."
+        allowed, reason = us500_vix_allows(vix_data)
+        if not allowed:
+            return "hold", reason
     if any(block in symbol for block in blocks):
         return "hold", f"{symbol}: news block is active."
     if any(item["symbol"] == symbol for item in positions):
@@ -181,6 +238,11 @@ def run_cycle():
     blocks = mt5_client.news_blocks()
     limits = mt5_client.risk()
     performance = mt5_client.performance()
+    try:
+        vix_data = mt5_client.vix()
+    except mt5_client.BridgeError as exc:
+        vix_data = None
+        journal.record("research", "vix-unavailable", str(exc), "US500")
     closed_trades = mt5_client.closed_trades()
     journal.sync_closed_trades(closed_trades)
     learning = journal.symbol_performance()
@@ -211,7 +273,14 @@ def run_cycle():
                 journal.record("kronos", "unavailable", message, row["symbol"])
                 decisions.append(message)
         side, reason = decide(
-            row, positions, blocks, limits, performance, learning, kronos_direction
+            row,
+            positions,
+            blocks,
+            limits,
+            performance,
+            learning,
+            kronos_direction,
+            vix_data,
         )
         journal.record("coordinator", side, reason, row["symbol"])
         if side == "hold":
