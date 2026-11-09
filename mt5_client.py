@@ -138,6 +138,13 @@ def performance():
     return require_ok(request_json("/performance"), "performance request failed")["symbols"]
 
 
+def closed_trades(days=90):
+    query = urlencode({"days": days})
+    return require_ok(
+        request_json("/history?" + query), "trade-history request failed"
+    )["trades"]
+
+
 def modify_stop(ticket, stop):
     body = require_ok(request_json("/modify", "POST", {"ticket": ticket, "stop": stop, "confirmation": "DEMO"}), "modify failed")
     return f"Stop for ticket {body['ticket']} moved to {body['stop']}."

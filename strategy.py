@@ -97,7 +97,31 @@ def order_risk_percent():
         return 0.0
 
 
-def decide(row, positions, blocks, limits, performance, kronos_direction=None):
+def learning_allows(symbol, learning):
+    """Keep gathering data until the minimum sample is available, then require edge."""
+    stats = learning.get(symbol)
+    if not stats:
+        return True, f"{symbol}: no closed-trade memory yet; probationary trading."
+    minimum_trades = max(1, int(os.getenv("SWARM_LEARNING_MIN_TRADES", "30")))
+    minimum_pf = max(0.0, float(os.getenv("SWARM_LEARNING_MIN_PROFIT_FACTOR", "1.05")))
+    if stats["trades"] < minimum_trades:
+        return True, (
+            f"{symbol}: learning sample {stats['trades']}/{minimum_trades}; "
+            "probationary trading."
+        )
+    profit_factor = stats["profit_factor"] or 0.0
+    if stats["net_profit"] <= 0 or profit_factor < minimum_pf:
+        return False, (
+            f"{symbol}: learned performance blocks entries after {stats['trades']} "
+            f"trades (net {stats['net_profit']:.2f}, PF {profit_factor:.2f})."
+        )
+    return True, (
+        f"{symbol}: learned edge accepted after {stats['trades']} trades "
+        f"(net {stats['net_profit']:.2f}, PF {profit_factor:.2f})."
+    )
+
+
+def decide(row, positions, blocks, limits, performance, learning, kronos_direction=None):
     symbol = row["symbol"]
     if weekend_close_active():
         return "hold", f"{symbol}: weekend trading cutoff is active."
@@ -126,6 +150,9 @@ def decide(row, positions, blocks, limits, performance, kronos_direction=None):
     stats = performance.get(symbol, {})
     if stats.get("disabled", False):
         return "hold", f"{symbol}: performance agent disabled it after losses."
+    allowed, learning_reason = learning_allows(symbol, learning)
+    if not allowed:
+        return "hold", learning_reason
     fast = row.get("fast")
     slow = row.get("slow")
     if fast is None or slow is None or fast == slow:
@@ -154,6 +181,9 @@ def run_cycle():
     blocks = mt5_client.news_blocks()
     limits = mt5_client.risk()
     performance = mt5_client.performance()
+    closed_trades = mt5_client.closed_trades()
+    journal.sync_closed_trades(closed_trades)
+    learning = journal.symbol_performance()
     decisions = manage_positions(rows)
     positions = mt5_client.positions_rows()
     for row in rows:
@@ -181,7 +211,7 @@ def run_cycle():
                 journal.record("kronos", "unavailable", message, row["symbol"])
                 decisions.append(message)
         side, reason = decide(
-            row, positions, blocks, limits, performance, kronos_direction
+            row, positions, blocks, limits, performance, learning, kronos_direction
         )
         journal.record("coordinator", side, reason, row["symbol"])
         if side == "hold":

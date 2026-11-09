@@ -8,6 +8,7 @@ import os
 from math import floor
 from datetime import datetime, time, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
 import MetaTrader5 as mt5
@@ -256,6 +257,43 @@ def performance_view():
             )
         item.pop("latest_loss", None)
     return payload(True, symbols=totals)
+
+
+def history_view(days):
+    end = datetime.now()
+    start = end - timedelta(days=max(1, min(int(days), 365)))
+    configured_magic = os.getenv("MT5_TRADE_HISTORY_MAGIC", "260615").strip()
+    magic = int(configured_magic) if configured_magic else None
+    deals = mt5.history_deals_get(start, end)
+    trades = []
+    if deals:
+        for deal in deals:
+            if deal.entry != mt5.DEAL_ENTRY_OUT:
+                continue
+            if magic is not None and deal.magic != magic:
+                continue
+            trades.append(
+                {
+                    "exit_deal": int(deal.ticket),
+                    "position_id": int(deal.position_id),
+                    "closed_at": datetime.fromtimestamp(int(deal.time)).isoformat(),
+                    "symbol": deal.symbol,
+                    # A sell exit closes a buy position, and vice versa.
+                    "side": "buy" if deal.type == mt5.DEAL_TYPE_SELL else "sell",
+                    "volume": float(deal.volume),
+                    "profit": float(deal.profit),
+                    "commission": float(deal.commission),
+                    "swap": float(deal.swap),
+                    "net_profit": round(
+                        float(deal.profit)
+                        + float(deal.commission)
+                        + float(deal.swap),
+                        8,
+                    ),
+                    "magic": int(deal.magic),
+                }
+            )
+    return payload(True, trades=trades)
 
 
 def watch_view():
@@ -507,16 +545,18 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authorized():
             self.send_json(401, payload(False, error="unauthorized"))
             return
-        path = self.path.split("?", 1)[0]
-        symbol = SYMBOLS[0]
-        count = 400
-        if "symbol=" in self.path:
-            symbol = self.path.split("symbol=", 1)[1].split("&", 1)[0].upper()
-        if "count=" in self.path:
-            try:
-                count = int(self.path.split("count=", 1)[1].split("&", 1)[0])
-            except ValueError:
-                pass
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
+        symbol = query.get("symbol", [SYMBOLS[0]])[0].upper()
+        try:
+            count = int(query.get("count", [400])[0])
+        except ValueError:
+            count = 400
+        try:
+            history_days = int(query.get("days", [90])[0])
+        except ValueError:
+            history_days = 90
         routes = {
             "/health": lambda: payload(True, terminal=mt5.terminal_info() is not None),
             "/account": account_view,
@@ -527,6 +567,7 @@ class Handler(BaseHTTPRequestHandler):
             "/positions": positions_view,
             "/risk": risk_view,
             "/performance": performance_view,
+            "/history": lambda: history_view(history_days),
             "/news": lambda: payload(True, blocks=sorted(NEWS_BLOCKS)),
         }
         if path not in routes:
