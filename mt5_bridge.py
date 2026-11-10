@@ -117,8 +117,8 @@ def ema(values, period):
     return result
 
 
-def average(symbol):
-    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 60)
+def average(symbol, timeframe=mt5.TIMEFRAME_M5):
+    rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, 60)
     if rates is None or len(rates) < 30:
         return None, None
     closes = [float(bar["close"]) for bar in rates]
@@ -129,7 +129,7 @@ def price_view(symbol):
     info, tick = tick_for(symbol)
     if info is None or tick is None:
         return payload(False, error=str(mt5.last_error()), symbol=symbol)
-    fast, slow = average(symbol)
+    fast, slow = average(symbol, mt5.TIMEFRAME_M5)
     point = info.point or 0.0001
     distance = point * 150
     return payload(
@@ -137,6 +137,7 @@ def price_view(symbol):
         symbol=symbol,
         bid=tick.bid,
         ask=tick.ask,
+        point=point,
         digits=info.digits,
         time=tick.time,
         fast=fast,

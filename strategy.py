@@ -75,6 +75,22 @@ def us500_vix_allows(vix):
     )
 
 
+def ema_touch(row):
+    """Require the current quote to be close to the active M5 EMA."""
+    try:
+        tolerance_points = max(
+            0.0, float(os.getenv("SWARM_EMA_TOUCH_TOLERANCE_POINTS", "5"))
+        )
+    except ValueError:
+        tolerance_points = 5.0
+    point = float(row.get("point") or 0)
+    ema = float(row.get("fast") or 0)
+    if point <= 0 or ema <= 0:
+        return False
+    midpoint = (float(row["bid"]) + float(row["ask"])) / 2
+    return abs(midpoint - ema) <= point * tolerance_points
+
+
 def trailing_stop(position):
     """Trail by R-multiple: trigger at 1R and keep 0.5R behind."""
     risk_state = position.get("risk_state")
@@ -262,6 +278,11 @@ def decide(
     if evidence["acted"] < 10 or evidence["accuracy"] < 0.55:
         return "hold", f"{symbol}: research accuracy {evidence['accuracy']} is below 0.55."
     side = "buy" if fast > slow else "sell"
+    if not ema_touch(row):
+        return "hold", (
+            f"{symbol}: price {((row['bid'] + row['ask']) / 2):.5f} "
+            f"is not touching the M5 EMA ({fast:.5f})."
+        )
     if os.getenv("SWARM_KRONOS_REQUIRED", "on").strip().lower() == "on" or kronos_research.mode() == "gate":
         if kronos_direction is None:
             return "hold", f"{symbol}: Kronos M1 forecast unavailable; trade blocked."

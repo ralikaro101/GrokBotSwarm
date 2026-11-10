@@ -50,11 +50,11 @@ def forecast(symbol):
     except ImportError as exc:
         raise RuntimeError("Install Kronos dependencies on the VPS first.") from exc
 
-    candles = mt5_client.candles(symbol, 400, timeframe="M1")
+    candles = mt5_client.candles(symbol, 400, timeframe="M5")
     frame = pd.DataFrame(candles)
     timestamps = pd.to_datetime(frame.pop("time"), unit="s", utc=True)
     predictor = _load_predictor()
-    future = pd.Series([timestamps.iloc[-1] + timedelta(minutes=1)])
+    future = pd.Series([timestamps.iloc[-1] + timedelta(minutes=5)])
     prediction = predictor.predict(
         df=frame[["open", "high", "low", "close", "volume"]],
         x_timestamp=timestamps,
