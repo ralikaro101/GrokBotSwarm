@@ -117,19 +117,25 @@ def ema(values, period):
     return result
 
 
-def average(symbol, timeframe=mt5.TIMEFRAME_M5):
-    rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, 60)
+def average(symbol):
+    """Return M5 EMA 9/21 and whether the latest completed candle touched EMA 9."""
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 1, 60)
     if rates is None or len(rates) < 30:
-        return None, None
+        return None, None, None
     closes = [float(bar["close"]) for bar in rates]
-    return ema(closes, 9), ema(closes, 21)
+    fast = ema(closes, 9)
+    slow = ema(closes, 21)
+    last = rates[-1]
+    return fast, slow, (
+        float(last["low"]) <= fast <= float(last["high"])
+    )
 
 
 def price_view(symbol):
     info, tick = tick_for(symbol)
     if info is None or tick is None:
         return payload(False, error=str(mt5.last_error()), symbol=symbol)
-    fast, slow = average(symbol, mt5.TIMEFRAME_M5)
+    fast, slow, ema_touch = average(symbol)
     point = info.point or 0.0001
     distance = point * 150
     return payload(
@@ -142,6 +148,7 @@ def price_view(symbol):
         time=tick.time,
         fast=fast,
         slow=slow,
+        ema_touch=ema_touch,
         stop_buy=round(tick.ask - distance, info.digits),
         stop_sell=round(tick.bid + distance, info.digits),
     )

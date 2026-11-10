@@ -76,19 +76,8 @@ def us500_vix_allows(vix):
 
 
 def ema_touch(row):
-    """Require the current quote to be close to the active M5 EMA."""
-    try:
-        tolerance_points = max(
-            0.0, float(os.getenv("SWARM_EMA_TOUCH_TOLERANCE_POINTS", "5"))
-        )
-    except ValueError:
-        tolerance_points = 5.0
-    point = float(row.get("point") or 0)
-    ema = float(row.get("fast") or 0)
-    if point <= 0 or ema <= 0:
-        return False
-    midpoint = (float(row["bid"]) + float(row["ask"])) / 2
-    return abs(midpoint - ema) <= point * tolerance_points
+    """Require the latest completed M5 candle's range to include EMA 9."""
+    return bool(row.get("ema_touch"))
 
 
 def trailing_stop(position):
@@ -280,16 +269,16 @@ def decide(
     side = "buy" if fast > slow else "sell"
     if not ema_touch(row):
         return "hold", (
-            f"{symbol}: price {((row['bid'] + row['ask']) / 2):.5f} "
-            f"is not touching the M5 EMA ({fast:.5f})."
+            f"{symbol}: the latest completed M5 candle did not touch "
+            f"EMA 9 ({fast:.5f})."
         )
     if os.getenv("SWARM_KRONOS_REQUIRED", "on").strip().lower() == "on" or kronos_research.mode() == "gate":
         if kronos_direction is None:
-            return "hold", f"{symbol}: Kronos M1 forecast unavailable; trade blocked."
+            return "hold", f"{symbol}: Kronos M5 forecast unavailable; trade blocked."
         if kronos_direction != side:
             return (
                 "hold",
-                f"{symbol}: Kronos M1 forecast {kronos_direction} disagrees with "
+                f"{symbol}: Kronos M5 forecast {kronos_direction} disagrees with "
                 f"EMA 9/21 direction {side}.",
             )
     stop = row["stop_buy"] if side == "buy" else row["stop_sell"]
@@ -332,7 +321,7 @@ def run_cycle():
                     row["symbol"],
                 )
                 decisions.append(
-                    f"{row['symbol']}: Kronos M1 forecast {forecast['direction']}."
+                    f"{row['symbol']}: Kronos M5 forecast {forecast['direction']}."
                 )
             except Exception as exc:
                 message = f"{row['symbol']}: Kronos unavailable: {exc}"
