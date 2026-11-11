@@ -117,25 +117,51 @@ def ema(values, period):
     return result
 
 
+def ema_series(values, period):
+    multiplier = 2 / (period + 1)
+    result = [float(values[0])]
+    for value in values[1:]:
+        result.append((float(value) - result[-1]) * multiplier + result[-1])
+    return result
+
+
+def macd(values):
+    """Return MACD line, signal line, and directional confirmation."""
+    fast = ema_series(values, 12)
+    slow = ema_series(values, 26)
+    line = [fast_value - slow_value for fast_value, slow_value in zip(fast, slow)]
+    signal = ema_series(line, 9)
+    if len(line) < 2:
+        return None, None, None
+    if line[-1] > signal[-1] and line[-1] > line[-2]:
+        direction = "buy"
+    elif line[-1] < signal[-1] and line[-1] < line[-2]:
+        direction = "sell"
+    else:
+        direction = None
+    return line[-1], signal[-1], direction
+
+
 def average(symbol):
-    """Return M5 EMA 9/21 and whether the latest completed candle touched EMA 9."""
+    """Return closed-M5 EMA and MACD confirmation data."""
     rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 1, 60)
     if rates is None or len(rates) < 30:
-        return None, None, None
+        return None, None, None, None, None, None
     closes = [float(bar["close"]) for bar in rates]
     fast = ema(closes, 9)
     slow = ema(closes, 21)
+    macd_line, macd_signal, macd_direction = macd(closes)
     last = rates[-1]
     return fast, slow, (
         float(last["low"]) <= fast <= float(last["high"])
-    )
+    ), macd_line, macd_signal, macd_direction
 
 
 def price_view(symbol):
     info, tick = tick_for(symbol)
     if info is None or tick is None:
         return payload(False, error=str(mt5.last_error()), symbol=symbol)
-    fast, slow, ema_touch = average(symbol)
+    fast, slow, ema_touch, macd_line, macd_signal, macd_direction = average(symbol)
     point = info.point or 0.0001
     distance = point * 150
     return payload(
@@ -149,6 +175,9 @@ def price_view(symbol):
         fast=fast,
         slow=slow,
         ema_touch=ema_touch,
+        macd=macd_line,
+        macd_signal=macd_signal,
+        macd_direction=macd_direction,
         stop_buy=round(tick.ask - distance, info.digits),
         stop_sell=round(tick.bid + distance, info.digits),
     )

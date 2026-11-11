@@ -267,6 +267,15 @@ def decide(
     if evidence["acted"] < 10 or evidence["accuracy"] < 0.55:
         return "hold", f"{symbol}: research accuracy {evidence['accuracy']} is below 0.55."
     side = "buy" if fast > slow else "sell"
+    macd_direction = row.get("macd_direction")
+    if macd_direction is None:
+        return "hold", f"{symbol}: MACD direction is unavailable or neutral."
+    if macd_direction != side:
+        return (
+            "hold",
+            f"{symbol}: MACD direction {macd_direction} disagrees with "
+            f"EMA 9/21 direction {side}.",
+        )
     if not ema_touch(row):
         return "hold", (
             f"{symbol}: the latest completed M5 candle did not touch "
@@ -282,7 +291,11 @@ def decide(
                 f"EMA 9/21 direction {side}.",
             )
     stop = row["stop_buy"] if side == "buy" else row["stop_sell"]
-    return side, f"{symbol}: {side}; fast {fast:.5f}, slow {slow:.5f}, stop {stop}."
+    return (
+        side,
+        f"{symbol}: {side}; fast {fast:.5f}, slow {slow:.5f}, "
+        f"MACD {macd_direction}, stop {stop}.",
+    )
 
 
 def run_cycle():
